@@ -4,12 +4,11 @@ PickFlow MCP Server — Sorftime-powered Amazon product discovery.
 import asyncio
 import json
 import re
-import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import SWEETSPOT, FILTER_WORDS, match_keyword
+from .config import SWEETSPOT, FILTER_WORDS, get_api_url, CACHE_DB
 from .api import (
     keyword_detail,
     keyword_list,
@@ -17,6 +16,19 @@ from .api import (
     product_detail,
     product_traffic_terms,
 )
+
+def _parse_review_stats(stats: str) -> tuple[float, float, float, float]:
+    """Shared parser for search_result_first_page_stats. Returns (rev100, rev300, rev500, non_bs)."""
+    rev100 = rev300 = rev500 = non_bs = 0.0
+    if not stats:
+        return 0.0, 0.0, 0.0, 0.0
+    m = re.search(r"Organic review-count below 100/300/500.*?:\s*([\d.]+)%/([\d.]+)%/([\d.]+)%", stats)
+    if m:
+        rev100, rev300, rev500 = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    m = re.search(r"Organic non-Best-Seller.*?share:\s*([\d.]+)%", stats)
+    if m:
+        non_bs = float(m.group(1))
+    return rev100, rev300, rev500, non_bs
 from .cache import (
     store_page,
     get_cache_status,
@@ -24,7 +36,7 @@ from .cache import (
     term_distribution,
     clear_cache,
 )
-from .scoring import score, parse_exposure_items, parse_bsr
+from .scoring import score, parse_exposure_items
 
 mcp = FastMCP("PickFlow")
 
@@ -87,7 +99,7 @@ async def cache_status() -> dict:
     USE THIS TOOL WHEN: Checking if cache covers the page ranges needed for research.
     """
     status = get_cache_status()
-    status["db_location"] = str(status.get("db_location", "~/.pickflow/aba_cache.db"))
+    status["db_location"] = str(CACHE_DB)
     return status
 
 
@@ -168,7 +180,6 @@ async def pool_build(categories: str = "",
     cat_list = [c.strip().lower() for c in categories.split(",") if c.strip()] if categories else None
     keywords = query_pool(categories=cat_list, min_sv=min_search_volume, limit=limit)
 
-    # Store in session state
     return {
         "success": True,
         "pool_size": len(keywords),
@@ -215,17 +226,7 @@ async def market_screen(pool_keywords: str, limit: int = 80) -> dict:
             continue
 
         d = detail.get("data", {})
-        stats = d.get("search_result_first_page_stats", "")
-
-        rev100 = 0
-        non_bs = 0
-        if stats:
-            m = re.search(r"Organic review-count below 100/300/500.*?:\s*([\d.]+)%", stats)
-            if m:
-                rev100 = float(m.group(1))
-            m = re.search(r"Organic non-Best-Seller.*?share:\s*([\d.]+)%", stats)
-            if m:
-                non_bs = float(m.group(1))
+        rev100, _, _, non_bs = _parse_review_stats(d.get("search_result_first_page_stats", ""))
 
         ms = int(d.get("monthly_search_volume", 0) or 0)
         cpc = float(d.get("recommended_cpc_bid", 0) or 0)
@@ -490,17 +491,8 @@ async def keyword_analyze(keyword: str) -> dict:
         return {"error": True, "message": "No data for this keyword", "keyword": keyword}
 
     d = result.get("data", {})
-    stats = d.get("search_result_first_page_stats", "")
     top100 = d.get("recent_15d_top3_pages_organic_top100_stats", {})
-
-    rev100 = rev300 = rev500 = non_bs = 0
-    if stats:
-        m = re.search(r"Organic review-count below 100/300/500.*?:\s*([\d.]+)%/([\d.]+)%/([\d.]+)%", stats)
-        if m:
-            rev100, rev300, rev500 = float(m.group(1)), float(m.group(2)), float(m.group(3))
-        m = re.search(r"Organic non-Best-Seller.*?share:\s*([\d.]+)%", stats)
-        if m:
-            non_bs = float(m.group(1))
+    rev100, rev300, rev500, non_bs = _parse_review_stats(d.get("search_result_first_page_stats", ""))
 
     top_products = []
     for p in top100.get("top5_product", [])[:5]:
@@ -683,8 +675,9 @@ async def session_status() -> dict:
     USE THIS TOOL WHEN: Starting a session or checking configuration.
     """
     cache = get_cache_status()
+    cache["db_location"] = str(CACHE_DB)
     return {
-        "api_configured": bool(__import__("pickflow_mcp_server.config", fromlist=["get_api_url"]).get_api_url()),
+        "api_configured": bool(get_api_url()),
         "cache": cache,
         "sweetspot_defaults": SWEETSPOT,
     }
