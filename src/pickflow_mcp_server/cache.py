@@ -44,6 +44,7 @@ def store_page(page: int, keywords: list[dict]) -> int:
     conn = _ensure_db()
     now = time.time()
     count = 0
+    before = conn.execute("SELECT COUNT(*) FROM aba_keywords").fetchone()[0]
     for kw in keywords:
         try:
             conn.execute("""
@@ -66,9 +67,10 @@ def store_page(page: int, keywords: list[dict]) -> int:
                 page,
                 now,
             ))
-            count += conn.rowcount
         except Exception:
             pass
+    after = conn.execute("SELECT COUNT(*) FROM aba_keywords").fetchone()[0]
+    count = after - before
     conn.commit()
     conn.close()
     return count
