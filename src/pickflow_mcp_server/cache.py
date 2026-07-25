@@ -30,6 +30,17 @@ def _ensure_db():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS market_cache (
+            keyword TEXT NOT NULL UNIQUE,
+            monthly_sv INTEGER,
+            cpc REAL,
+            competitors INTEGER,
+            rev100 REAL,
+            non_bs REAL,
+            cached_at REAL NOT NULL
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS cache_meta (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -197,3 +208,57 @@ def clear_cache(page_start: int | None = None, page_end: int | None = None) -> i
     conn.commit()
     conn.close()
     return deleted
+
+
+# ══════════════════════════════════════════
+# Market Cache (keyword_detail results)
+# ══════════════════════════════════════════
+
+MARKET_CACHE_TTL = 7 * 24 * 3600  # 7 days in seconds
+
+
+def store_market_cache(keyword: str, monthly_sv: int, cpc: float,
+                       competitors: int, rev100: float, non_bs: float):
+    """Store keyword_detail result in cache."""
+    conn = _ensure_db()
+    now = time.time()
+    conn.execute("""
+        INSERT OR REPLACE INTO market_cache
+        (keyword, monthly_sv, cpc, competitors, rev100, non_bs, cached_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (keyword, monthly_sv, cpc, competitors, rev100, non_bs, now))
+    conn.commit()
+    conn.close()
+
+
+def get_market_cache(keyword: str, ttl_hours: int = 168) -> tuple[bool, dict | None]:
+    """
+    Check if keyword_detail result is in cache.
+    Returns (hit: bool, data: dict | None).
+    """
+    conn = _ensure_db()
+    ttl = ttl_hours * 3600
+    now = time.time()
+    row = conn.execute(
+        "SELECT monthly_sv, cpc, competitors, rev100, non_bs, cached_at "
+        "FROM market_cache WHERE keyword = ?",
+        (keyword,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return False, None
+    if now - row[5] > ttl:
+        return False, None  # expired
+    return True, {
+        "monthly_sv": row[0], "cpc": row[1], "competitors": row[2],
+        "rev100": row[3], "non_bs": row[4],
+    }
+
+
+def clear_market_cache():
+    """Clear all market cache."""
+    conn = _ensure_db()
+    conn.execute("DELETE FROM market_cache")
+    conn.commit()
+    conn.close()

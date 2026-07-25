@@ -192,16 +192,23 @@ async def pool_build(categories: str = "",
 
 
 @mcp.tool()
-async def market_screen(pool_keywords: str, limit: int = 80) -> dict:
+async def market_screen(pool_keywords: str, limit: int = 80,
+                         min_search_volume: int = 3000,
+                         concurrency: int = 5) -> dict:
     """
     Run keyword_detail on top pool keywords for market screening.
+    Uses caching + concurrent API calls + smart skip for speed.
 
     Args:
-        pool_keywords: JSON array of keyword objects from pool_build, or 'cached_top' to use top from cache
+        pool_keywords: JSON array of keyword objects from pool_build, or 'cached_top'
         limit: Max keywords to analyze
+        min_search_volume: Skip keywords below this monthly search volume
+        concurrency: Max parallel API calls (1-10)
 
     USE THIS TOOL WHEN: Evaluating which markets have best new-seller opportunity.
     """
+    # Smart skip: filter by volume before making API calls
+    sem = asyncio.Semaphore(max(1, min(concurrency, 10)))
 
     if pool_keywords == "cached_top":
         keywords = query_pool(categories=None, min_sv=5000, limit=limit)
@@ -214,56 +221,100 @@ async def market_screen(pool_keywords: str, limit: int = 80) -> dict:
     if not keywords:
         return {"error": True, "message": "No keywords provided. Run pool_build first or use 'cached_top'."}
 
-    markets = []
-    for i, kw in enumerate(keywords[:limit]):
-        kw_text = kw["keyword"] if isinstance(kw, dict) else str(kw)
-        try:
-            detail = await keyword_detail(kw_text)
-        except Exception:
+    # Smart skip: pre-filter
+    import time
+    t0 = time.time()
+    eligible = []
+    skipped = 0
+    for k in keywords[:limit]:
+        kw = k["keyword"] if isinstance(k, dict) else str(k)
+        sv = k.get("search_volume_30d", 0) if isinstance(k, dict) else 0
+        if sv < min_search_volume:
+            skipped += 1
             continue
+        eligible.append(k)
+
+    if not eligible:
+        return {"error": True, "message": f"All {len(keywords[:limit])} keywords below volume threshold ({min_search_volume}). Lower min_search_volume."}
+
+    async def screen_one(kw_dict):
+        kw_text = kw_dict["keyword"] if isinstance(kw_dict, dict) else str(kw_dict)
+
+        # Cache check
+        from .cache import get_market_cache, store_market_cache
+        hit, cached = get_market_cache(kw_text)
+        if hit:
+            return {
+                "keyword": kw_text, "monthly_search_volume": cached["monthly_sv"],
+                "cpc": cached["cpc"], "competitors": cached["competitors"],
+                "rev_below_100_pct": cached["rev100"], "non_amazon_pct": cached["non_bs"],
+                "peak_season": "", "market_score": _calc_market_score(cached["monthly_sv"], cached["rev100"], cached["non_bs"]),
+                "tier": _calc_tier(cached["monthly_sv"], cached["rev100"], cached["non_bs"]),
+                "cached": True,
+            }
+
+        # API call with semaphore
+        async with sem:
+            try:
+                detail = await keyword_detail(kw_text)
+            except Exception:
+                return None
 
         if not detail or "_error" in detail:
-            continue
+            return None
 
         d = detail.get("data", {})
         rev100, _, _, non_bs = _parse_review_stats(d.get("search_result_first_page_stats", ""))
-
         ms = int(d.get("monthly_search_volume", 0) or 0)
         cpc = float(d.get("recommended_cpc_bid", 0) or 0)
         comp = int(d.get("search_result_competitor_count", 0) or 0)
         peak = d.get("search_volume_peak_season", "")
 
-        # Simplified market score
-        demand = min(10, ms / 20000)
-        newbie = rev100 / 100 * 10
-        amazon = non_bs / 100 * 10
-        total = demand * 0.4 + newbie * 0.35 + amazon * 0.25
-        tier = "S" if total >= 5 else "A" if total >= 3.5 else "B"
+        # Store cache
+        store_market_cache(kw_text, ms, cpc, comp, rev100, non_bs)
 
-        markets.append({
-            "keyword": kw_text,
-            "monthly_search_volume": ms,
-            "cpc": cpc,
-            "competitors": comp,
-            "rev_below_100_pct": rev100,
-            "non_amazon_pct": non_bs,
-            "peak_season": peak,
-            "market_score": round(total, 1),
-            "tier": tier,
-        })
+        return {
+            "keyword": kw_text, "monthly_search_volume": ms, "cpc": cpc,
+            "competitors": comp, "rev_below_100_pct": rev100,
+            "non_amazon_pct": non_bs, "peak_season": peak,
+            "market_score": _calc_market_score(ms, rev100, non_bs),
+            "tier": _calc_tier(ms, rev100, non_bs),
+            "cached": False,
+        }
 
-        await asyncio.sleep(0.15)
+    results = await asyncio.gather(*[screen_one(kw) for kw in eligible])
+    markets = [r for r in results if r is not None]
 
     s_count = sum(1 for m in markets if m["tier"] == "S")
     a_count = sum(1 for m in markets if m["tier"] == "A")
+    api_calls = sum(1 for m in markets if not m.get("cached", False))
+    cache_hits = sum(1 for m in markets if m.get("cached", False))
+    elapsed = round(time.time() - t0, 1)
 
     return {
         "success": True,
         "markets_analyzed": len(markets),
+        "skipped_low_volume": skipped,
         "s_tier": s_count,
         "a_tier": a_count,
+        "api_calls": api_calls,
+        "cache_hits": cache_hits,
+        "concurrency": concurrency,
+        "elapsed_seconds": elapsed,
         "top_markets": sorted(markets, key=lambda m: m["market_score"], reverse=True)[:20],
     }
+
+
+def _calc_market_score(ms: int, rev100: float, non_bs: float) -> float:
+    demand = min(10, ms / 20000)
+    newbie = rev100 / 100 * 10
+    amazon = non_bs / 100 * 10
+    return round(demand * 0.4 + newbie * 0.35 + amazon * 0.25, 1)
+
+
+def _calc_tier(ms: int, rev100: float, non_bs: float) -> str:
+    score = _calc_market_score(ms, rev100, non_bs)
+    return "S" if score >= 5 else "A" if score >= 3.5 else "B"
 
 
 @mcp.tool()
@@ -395,16 +446,20 @@ async def asin_score(asin: str, include_detail: bool = False) -> dict:
 
 
 @mcp.tool()
-async def asin_score_batch(asins_json: str, limit: int = 50) -> dict:
+async def asin_score_batch(asins_json: str, limit: int = 50,
+                            concurrency: int = 5) -> dict:
     """
-    Score multiple ASINs and rank by total score.
+    Score multiple ASINs and rank by total score. Uses concurrent API calls.
 
     Args:
         asins_json: JSON array of ASIN objects (from asin_discover) or '["ASIN1","ASIN2",...]'
         limit: Max ASINs to score
+        concurrency: Max parallel API calls (1-10)
 
     USE THIS TOOL WHEN: Scoring all ASINs discovered by asin_discover.
     """
+    sem = asyncio.Semaphore(max(1, min(concurrency, 10)))
+
     try:
         asins = json.loads(asins_json)
     except json.JSONDecodeError:
@@ -420,53 +475,56 @@ async def asin_score_batch(asins_json: str, limit: int = 50) -> dict:
 
     asin_list = [a for a in asin_list if a][:limit]
 
-    results = []
-    for i, asin in enumerate(asin_list):
-        try:
-            d_result = await product_detail(asin)
-            t_result = await product_traffic_terms(asin, page=1)
-        except Exception:
-            continue
+    import time
+    t0 = time.time()
 
-        if not d_result or "_error" in d_result:
-            continue
+    async def score_one(asin):
+        async with sem:
+            try:
+                d_result = await product_detail(asin)
+                t_result = await product_traffic_terms(asin, page=1)
+            except Exception:
+                return None
 
-        detail = d_result.get("data", {})
-        t_items = []
-        if t_result and "_error" not in t_result:
-            t_items = t_result.get("data", [])
-            if isinstance(t_items, dict):
-                t_items = [t_items]
+            if not d_result or "_error" in d_result:
+                return None
 
-        traffic_count, ad_pct = parse_exposure_items(t_items)
-        total, tier, scores = score(detail, traffic_count, ad_pct)
+            detail = d_result.get("data", {})
+            t_items = []
+            if t_result and "_error" not in t_result:
+                t_items = t_result.get("data", [])
+                if isinstance(t_items, dict):
+                    t_items = [t_items]
 
-        results.append({
-            "asin": asin,
-            "title": detail.get("title", "")[:80],
-            "price": detail.get("price", ""),
-            "monthly_sales": detail.get("monthly_sales_volume", ""),
-            "reviews": detail.get("review_count", ""),
-            "stars": detail.get("star_rating", ""),
-            "profit_rate": detail.get("gross_profit_rate", ""),
-            "ad_pct": ad_pct,
-            "total_score": total,
-            "tier": tier,
-            "scores": {k: v for k, v in scores.items()},
-        })
+            traffic_count, ad_pct = parse_exposure_items(t_items)
+            total, tier, scores = score(detail, traffic_count, ad_pct)
 
-        await asyncio.sleep(0.15)
+            return {
+                "asin": asin, "title": detail.get("title", "")[:80],
+                "price": detail.get("price", ""),
+                "monthly_sales": detail.get("monthly_sales_volume", ""),
+                "reviews": detail.get("review_count", ""),
+                "stars": detail.get("star_rating", ""),
+                "profit_rate": detail.get("gross_profit_rate", ""),
+                "ad_pct": ad_pct, "total_score": total, "tier": tier,
+                "scores": {k: v for k, v in scores.items()},
+            }
 
+    results_raw = await asyncio.gather(*[score_one(asin) for asin in asin_list])
+    results = [r for r in results_raw if r is not None]
     results.sort(key=lambda r: r["total_score"], reverse=True)
 
     s_count = sum(1 for r in results if r["tier"] == "S")
     a_count = sum(1 for r in results if r["tier"] == "A")
+    elapsed = round(time.time() - t0, 1)
 
     return {
         "success": True,
         "scored": len(results),
         "s_tier": s_count,
         "a_tier": a_count,
+        "concurrency": concurrency,
+        "elapsed_seconds": elapsed,
         "top": results[:30],
     }
 
