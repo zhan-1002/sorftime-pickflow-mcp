@@ -37,6 +37,7 @@ from .cache import (
     clear_cache,
 )
 from .scoring import score, parse_exposure_items, check_hard_filters
+from .fba import calculate as fba_calc, FBAInput
 
 mcp = FastMCP("PickFlow")
 
@@ -724,6 +725,93 @@ async def pipeline_validate(test_asins_json: str) -> dict:
         "asins_with_any_coverage": covered_count,
         "recall_rate_pct": round(covered_count / max(len(asins), 1) * 100, 1),
         "details": results[:20],
+    }
+
+
+@mcp.tool()
+async def fba_calculator(
+    selling_price: float,
+    purchase_cost_cny: float,
+    fba_shipping_cny: float = 16.0,
+    fba_delivery_usd: float = 7.30,
+    commission_rate_pct: float = 15.0,
+    ad_budget_usd: float = 10.0,
+    cpc_usd: float = 1.0,
+    conversion_rate_pct: float = 18.0,
+    discount_pct: float = 0.0,
+    exchange_rate: float = 6.8,
+    organic_traffic: float = 0.0,
+    return_rate_pct: float = 5.0,
+) -> dict:
+    """
+    FBA profit calculator — unit economics for Amazon FBA products.
+    Includes 2026 hidden fees (fuel surcharge, storage, placement, returns, prep).
+
+    Args:
+        selling_price: Target selling price in USD (e.g. 29.99)
+        purchase_cost_cny: 1688/supplier unit cost in CNY (e.g. 27)
+        fba_shipping_cny: China→FBA freight per unit in CNY (default 16)
+        fba_delivery_usd: Amazon fulfillment fee in USD (default 7.30)
+        commission_rate_pct: Amazon referral fee % (default 15)
+        ad_budget_usd: Daily PPC budget in USD (default 10)
+        cpc_usd: Cost per click in USD (default 1.0)
+        conversion_rate_pct: Ad conversion rate % (default 18)
+        discount_pct: Coupon/discount rate % (default 0)
+        exchange_rate: USD to CNY (default 6.8)
+        organic_traffic: Daily organic clicks (default 0, conservative)
+        return_rate_pct: Expected return rate % (default 5)
+
+    Returns breakeven price, unit profit, daily/monthly profit, ACOS, ROI, margin, and verdict.
+
+    USE THIS TOOL WHEN: Evaluating profit viability of a product before sourcing.
+    """
+    try:
+        inp = FBAInput(
+            selling_price_usd=selling_price,
+            purchase_cost_cny=purchase_cost_cny,
+            fba_shipping_cny=fba_shipping_cny,
+            fba_delivery_usd=fba_delivery_usd,
+            commission_rate_pct=commission_rate_pct,
+            ad_budget_usd=ad_budget_usd,
+            cpc_usd=cpc_usd,
+            conversion_rate_pct=conversion_rate_pct,
+            discount_pct=discount_pct,
+            exchange_rate=exchange_rate,
+            organic_traffic=organic_traffic,
+            return_rate_pct=return_rate_pct,
+        )
+    except Exception as e:
+        return {"error": True, "message": f"Invalid input: {str(e)}"}
+
+    result = fba_calc(inp)
+
+    return {
+        "success": True,
+        "verdict": result.verdict,
+        "verdict_reasons": result.verdict_reasons,
+        "breakeven_price_usd": result.breakeven_price_usd,
+        "unit_economics": {
+            "unit_profit_usd": result.unit_profit_usd,
+            "unit_profit_cny": result.unit_profit_cny,
+            "net_profit_margin_pct": result.net_profit_margin_pct,
+            "roi_pct": result.roi_pct,
+            "sales_proceed_usd": result.sales_proceed_usd,
+        },
+        "projections": {
+            "daily_orders": result.daily_orders,
+            "monthly_orders": result.monthly_orders,
+            "daily_profit_usd": result.daily_profit_usd,
+            "monthly_profit_usd": result.monthly_profit_usd,
+            "monthly_profit_cny": result.monthly_profit_cny,
+        },
+        "efficiency": {
+            "acos_pct": result.acos_pct,
+            "tacos_pct": result.tacos_pct,
+        },
+        "hidden_fees": {
+            "total_usd": result.hidden_fees_usd,
+            "breakdown": result.hidden_fees_breakdown,
+        },
     }
 
 
