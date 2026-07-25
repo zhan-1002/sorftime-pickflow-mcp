@@ -729,7 +729,7 @@ async def pipeline_validate(test_asins_json: str) -> dict:
 
 
 @mcp.tool()
-async def fba_calculator(
+async def fba_profit(
     selling_price: float,
     purchase_cost_cny: float,
     fba_shipping_cny: float = 16.0,
