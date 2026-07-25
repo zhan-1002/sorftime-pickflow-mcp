@@ -36,7 +36,7 @@ from .cache import (
     term_distribution,
     clear_cache,
 )
-from .scoring import score, parse_exposure_items
+from .scoring import score, parse_exposure_items, check_hard_filters
 
 mcp = FastMCP("PickFlow")
 
@@ -415,11 +415,14 @@ async def asin_score(asin: str, include_detail: bool = False) -> dict:
 
     traffic_count, ad_pct = parse_exposure_items(t_items)
     total, tier, scores = score(detail, traffic_count, ad_pct)
+    filter_pass, filter_fails = check_hard_filters(detail)
 
     result = {
         "asin": asin,
         "total_score": total,
         "tier": tier,
+        "tier_final": tier if filter_pass else "F",
+        "hard_filters": {"passed": filter_pass, "failures": filter_fails},
         "dimensions": scores,
         "summary": {
             "title": detail.get("title", "")[:80],
@@ -498,6 +501,7 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
 
             traffic_count, ad_pct = parse_exposure_items(t_items)
             total, tier, scores = score(detail, traffic_count, ad_pct)
+            filter_pass, filter_fails = check_hard_filters(detail)
 
             return {
                 "asin": asin, "title": detail.get("title", "")[:80],
@@ -506,7 +510,9 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
                 "reviews": detail.get("review_count", ""),
                 "stars": detail.get("star_rating", ""),
                 "profit_rate": detail.get("gross_profit_rate", ""),
-                "ad_pct": ad_pct, "total_score": total, "tier": tier,
+                "ad_pct": ad_pct, "total_score": total,
+                "tier": tier, "tier_final": tier if filter_pass else "F",
+                "hard_filters": {"passed": filter_pass, "failures": filter_fails},
                 "scores": {k: v for k, v in scores.items()},
             }
 

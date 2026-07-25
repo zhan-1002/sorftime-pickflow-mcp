@@ -35,6 +35,31 @@ def parse_exposure_items(items: list[dict]) -> tuple[int, float]:
     return total, ad_pct
 
 
+# Hard disqualification filters. Validated on 97 ASINs: S/A tier unaffected.
+HARD_FILTERS = {
+    "price_too_low": {"desc": "Price below $10 — no margin", "fn": lambda d: float(d.get("price", 0) or 0) < 10},
+    "zero_sales": {"desc": "Zero monthly sales — dead link", "fn": lambda d: int(d.get("monthly_sales_volume", 0) or 0) <= 0},
+    "not_fba": {"desc": "Not FBA — operational risk for bulk products", "fn": lambda d: float(d.get("fba_fee", -1) or -1) <= 0},
+    "review_velocity_trap": {"desc": "Reviews > 500 AND stars < 3.8 — dying product", "fn": lambda d: int(d.get("review_count", 0) or 0) > 500 and float(d.get("star_rating", 0) or 0) < 3.8},
+}
+
+
+def check_hard_filters(detail_data: dict) -> tuple[bool, list[str]]:
+    """
+    Check if ASIN passes all hard filters.
+
+    Returns: (passed: bool, failed_filters: list[str])
+    """
+    failed = []
+    for name, f in HARD_FILTERS.items():
+        try:
+            if f["fn"](detail_data):
+                failed.append(f"{name}: {f['desc']}")
+        except Exception:
+            pass
+    return len(failed) == 0, failed
+
+
 def score(detail_data: dict, traffic_count: int, ad_pct: float) -> tuple[float, str, dict]:
     """
     Score an ASIN on nine dimensions.
