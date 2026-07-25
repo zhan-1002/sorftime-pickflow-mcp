@@ -29,6 +29,62 @@ def _parse_review_stats(stats: str) -> tuple[float, float, float, float]:
     if m:
         non_bs = float(m.group(1))
     return rev100, rev300, rev500, non_bs
+
+
+def _extract_enriched(detail_data: dict) -> dict:
+    """Extract full market-level metrics from keyword_detail response.
+    Includes brand/seller concentration, ad review distribution, coupon, price range.
+    All data already in the API response — zero extra calls."""
+    stats = detail_data.get("search_result_first_page_stats", "")
+    top100 = detail_data.get("recent_15d_top3_pages_organic_top100_stats", {})
+
+    enriched = {}
+    if stats:
+        m = re.search(r"Ad review-count below 100/300/500.*?:\s*([\d.]+)%/([\d.]+)%/([\d.]+)%", stats)
+        if m:
+            enriched["ad_rev100"] = float(m.group(1))
+            enriched["ad_rev300"] = float(m.group(2))
+            enriched["ad_rev500"] = float(m.group(3))
+
+        m = re.search(r"Coupon-promotion.*?:\s*(\d+)\s*pcs\s*/\s*([\d.]+)%", stats)
+        if m:
+            enriched["coupon_count"] = int(m.group(1))
+            enriched["coupon_pct"] = float(m.group(2))
+
+        m = re.search(r"Average star rating:\s*([\d.]+)", stats)
+        if m:
+            enriched["avg_stars"] = float(m.group(1))
+
+        m = re.search(r"Average review count:\s*([\d.]+)", stats)
+        if m:
+            enriched["avg_reviews"] = float(m.group(1))
+
+    # Brand/Seller concentration from top5
+    def _extract_share(text):
+        m = re.search(r"share:\s*([\d.]+)%", str(text))
+        return float(m.group(1)) if m else 0.0
+
+    brands = top100.get("top5_brand", [])
+    sellers = top100.get("top5_seller", [])
+
+    enriched["brand_cr3"] = round(sum(_extract_share(b.get("monthly_sales", "")) for b in brands[:3]), 1)
+    enriched["brand_count"] = len(brands)
+    enriched["seller_cr3"] = round(sum(_extract_share(s.get("monthly_sales", "")) for s in sellers[:3]), 1)
+    enriched["seller_count"] = len(sellers)
+
+    # Price range from top5 products
+    products = top100.get("top5_product", [])
+    prices = [float(p.get("price", 0) or 0) for p in products if p.get("price")]
+    if prices:
+        enriched["price_min"] = round(min(prices), 2)
+        enriched["price_max"] = round(max(prices), 2)
+        enriched["price_median"] = round(sorted(prices)[len(prices)//2], 2)
+
+    # Top brand/seller names
+    enriched["top_brands"] = [{"name": b.get("brand", ""), "share": round(_extract_share(b.get("monthly_sales", "")), 1)} for b in brands[:3]]
+    enriched["top_sellers"] = [{"name": s.get("seller", ""), "share": round(_extract_share(s.get("monthly_sales", "")), 1)} for s in sellers[:3]]
+
+    return enriched
 from .cache import (
     store_page,
     get_cache_status,
@@ -265,19 +321,36 @@ async def market_screen(pool_keywords: str, limit: int = 80,
             return None
 
         d = detail.get("data", {})
-        rev100, _, _, non_bs = _parse_review_stats(d.get("search_result_first_page_stats", ""))
+        rev100, rev300, rev500, non_bs = _parse_review_stats(d.get("search_result_first_page_stats", ""))
         ms = int(d.get("monthly_search_volume", 0) or 0)
         cpc = float(d.get("recommended_cpc_bid", 0) or 0)
         comp = int(d.get("search_result_competitor_count", 0) or 0)
         peak = d.get("search_volume_peak_season", "")
 
-        # Store cache
+        # Enriched fields (zero extra API)
+        enriched = _extract_enriched(d)
+
+        # Store cache (core fields only — enriched is bonus metadata)
         store_market_cache(kw_text, ms, cpc, comp, rev100, non_bs)
 
         return {
             "keyword": kw_text, "monthly_search_volume": ms, "cpc": cpc,
             "competitors": comp, "rev_below_100_pct": rev100,
+            "rev_below_300_pct": rev300, "rev_below_500_pct": rev500,
             "non_amazon_pct": non_bs, "peak_season": peak,
+            "ad_rev_below_100_pct": enriched.get("ad_rev100"),
+            "ad_rev_below_300_pct": enriched.get("ad_rev300"),
+            "brand_cr3_pct": enriched.get("brand_cr3"),
+            "brand_count": enriched.get("brand_count"),
+            "seller_cr3_pct": enriched.get("seller_cr3"),
+            "seller_count": enriched.get("seller_count"),
+            "coupon_count": enriched.get("coupon_count"),
+            "coupon_pct": enriched.get("coupon_pct"),
+            "avg_reviews": enriched.get("avg_reviews"),
+            "avg_stars": enriched.get("avg_stars"),
+            "price_range": {"min": enriched.get("price_min"), "max": enriched.get("price_max"), "median": enriched.get("price_median")},
+            "top_brands": enriched.get("top_brands", []),
+            "top_sellers": enriched.get("top_sellers", []),
             "market_score": _calc_market_score(ms, rev100, non_bs),
             "tier": _calc_tier(ms, rev100, non_bs),
             "cached": False,

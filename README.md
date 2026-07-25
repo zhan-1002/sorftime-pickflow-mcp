@@ -21,7 +21,7 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 | Tool | Description |
 |------|-------------|
 | `pool_build` | Build keyword pool from cache (no API) |
-| `market_screen` | Run keyword_detail to score markets |
+| `market_screen` | Run keyword_detail + enriched fields (brand CR3, seller CR3, ad review dist, coupon, price range) |
 | `asin_discover` | Find ASINs with sweetspot filters |
 | `asin_score` | Nine-dimension scoring for a single ASIN |
 | `asin_score_batch` | Batch score multiple ASINs |

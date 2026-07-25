@@ -12,6 +12,7 @@
 
 ## Next
 
+- [x] **Enriched market_screen** — keyword_detail now returns brand_cr3, seller_cr3, ad_rev100/300, coupon_pct, price_range, top_brands/sellers (zero extra API)
 - [ ] **ASIN detail cache** — cached product_detail results with configurable TTL
 - [ ] **BSR regression model** — category-specific power-law estimates `sales = A * BSR^(-B)` as fallback when sorftime returns no sales data
 - [ ] **Trend dimension** — integrate `product_trend` API data into growth_potential scoring
