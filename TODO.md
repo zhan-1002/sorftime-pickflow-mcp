@@ -14,25 +14,57 @@
 
 - [x] **Enriched market_screen** — keyword_detail now returns brand_cr3, seller_cr3, ad_rev100/300, coupon_pct, price_range, top_brands/sellers (zero extra API)
 - [ ] **ASIN detail cache** — cached product_detail results with configurable TTL
-- [ ] **BSR regression model** — category-specific power-law estimates `sales = A * BSR^(-B)` as fallback when sorftime returns no sales data
-- [ ] **Trend dimension** — integrate `product_trend` API data into growth_potential scoring
-- [ ] **Multi-marketplace support** — parameterize sweetspot/hard_filter thresholds by marketplace (US/UK/DE/JP)
+- [ ] **BSR regression model** — category-specific power-law estimates `sales = A * BSR^(-B)`
+
+  sorftime's `monthly_sales_volume` frequently returns `5` or `0` (default when data not captured),
+  but BSR is Amazon public data and always available. A BSR regression fills the gap and provides
+  a cross-reference to validate sorftime's estimates.
+
+  - Calibrated coefficients from amazon-omniscient project (52000, 0.80 for Home & Kitchen, etc.)
+  - `product_detail` already returns `top_category` with numeric BSR — zero extra API calls
+  - Integration: add `bsr_estimated_sales` field to `asin_score` output alongside sorftime's figure
+  - Also useful for: identifying when sorftime's estimate is suspicious (e.g., 5 when BSR=15000)
+
+- [ ] **product_trend integration** — market trend direction and seasonality
+
+  Current scoring is a point-in-time snapshot. A product doing 500/mo with a -30% trend is very
+  different from one doing 500/mo with a +30% trend. `keyword_trend` API (already available, unused)
+  returns 12-month search volume history.
+
+  - Extract from curve: trend direction (±% last 3 months), peak season month, stability (CV)
+  - Integration: add `trend_direction` dimension to nine-dim scoring (rising +2pts, falling -2pts)
+  - API cost: ~10 calls for S-tier markets only
+  - Also feeds into seasonality risk assessment (e.g., Christmas-only vs year-round)
+
+- [ ] **Multi-marketplace support** — per-site parameter profiles
+
+  All current parameters (price sweet spot $15-45, BSR thresholds 3K-500K, review limit 150)
+  were calibrated on US data from 97 ASINs. UK/JP/DE have different price norms, BSR scales,
+  and FBA prevalence. Each marketplace needs its own parameter profile.
+
+  - Config: `config/sweetspot.json` → `config/sweetspot_us.json`, `sweetspot_uk.json`, etc.
+  - Tools accept `amz_site` parameter, defaulting to US
+  - Hard filters also marketplace-specific (AU BSR max=20000 vs US=50000)
+  - First targets: US (current), UK, DE — covers bulk/gift product markets
 - [ ] **Pipeline resume** — checkpoint/resume for long-running cache_aba_pull
 
 ## Future
 
-- [ ] **1688 Official API integration** — supplier cost lookup
+- [ ] **1688 Official API integration** — supplier cost lookup and fba_profit automation
+
+  Current `fba_profit` tool requires manual purchase cost input. Integrating supplier pricing
+  would close the loop: ASIN discovery → profit calculation with real costs → sourcing decision.
 
   The omniscient project demonstrates a 1688 scraper approach (Playwright + rotating proxies)
   but it's fragile due to anti-bot countermeasures, login walls, and frequent layout changes.
-  PickFlow will instead integrate with Alibaba's official 1688 API when available,
-  providing reliable supplier data (FOB price, MOQ, lead time) without scraping.
+  PickFlow will instead integrate with Alibaba's official 1688 API when available.
 
   - Source: 1688 Open Platform API (pending availability)
-  - Input: product keywords or image → 1688 search
-  - Output: supplier name, FOB price range, MOQ, location, rating
-  - Integration point: New MCP tool `supplier_lookup` in analysis layer
-  - Dependencies: API key, rate limits TBD
+  - Input: product keyword or image → 1688 product search
+  - Output: supplier name, FOB price range, MOQ, location, rating, lead time
+  - Integration: New MCP tool `supplier_lookup` → feeds directly into `fba_profit`'s `purchase_cost_cny`
+  - Bonus: compare multiple suppliers, flag best MOQ/price trade-off
+  - Dependencies: API key, rate limits, authentication method TBD
 
 - [ ] **Review sentiment analysis** — LLM-powered pain point extraction from competitor reviews
 - [ ] **Product blueprint generator** — complaint-driven differentiation spec from review gaps
