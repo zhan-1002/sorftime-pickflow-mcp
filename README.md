@@ -1,6 +1,10 @@
 # Sorftime PickFlow MCP
 
-Model Context Protocol server for Amazon product discovery. Powered by Sorftime API.
+Model Context Protocol server + Skill for Amazon product discovery. Powered by Sorftime API.
+
+> Previously: `sorftime-pickflow-skill`. Consolidated into this repository.
+> `skill/` contains the legacy Claude Code Skill (SKILL.md, methodology, config).
+> `src/` contains the MCP server (15 tools, cache, pipeline, scoring).
 
 ## Tools
 

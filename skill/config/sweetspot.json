@@ -1,0 +1,15 @@
+{
+  "product_search": {
+    "price_min": 10,
+    "price_max": 50,
+    "ratings_count_max": 150,
+    "month_sales_volume_min": 50,
+    "delivery_type": "FBA",
+    "amz_site": "US"
+  },
+  "market_screening": {
+    "rev100_min": 30,
+    "non_amz_min": 15,
+    "monthly_sv_min": 2000
+  }
+}

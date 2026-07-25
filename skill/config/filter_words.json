@@ -1,0 +1,23 @@
+{
+  "target": [
+    "bulk", "gift", "party", "wedding", "christmas", "halloween", "favor",
+    "supplies", "bags", "decorations", "team", "christian", "employee",
+    "appreciation", "napkin", "candle", "basket", "ornament", "new year",
+    "easter", "valentine", "thanksgiving", "goodie", "goody", "stuffers",
+    "baseball", "soccer", "cheer", "sports", "fans", "tablecloth",
+    "centerpiece", "table runner", "stocking", "advent", "nativity",
+    "wreath", "garland", "bridal", "bridesmaid", "groomsmen", "baby shower",
+    "bachelorette", "communion", "baptism", "diwali", "hanukkah",
+    "church", "religious", "prayer", "journal", "notebook",
+    "tote bag", "gift bag", "gift box", "trophy", "medal", "award",
+    "graduation", "housewarming", "house warming", "new home",
+    "classroom", "teacher", "back to school",
+    "kitchen", "farmhouse", "rustic", "boho", "vintage",
+    "personalized", "custom", "diy", "craft", "handmade"
+  ],
+  "blacklist": [
+    "amazon gift card", "egift", "printable gift card", "e gift card",
+    "roblox gift card", "playstation gift card", "xbox gift card"
+  ],
+  "min_keyword_length": 8
+}

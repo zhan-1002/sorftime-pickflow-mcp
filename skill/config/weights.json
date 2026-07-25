@@ -1,0 +1,62 @@
+{
+  "_description": "Nine-dimension scoring weights. Total = 10.7",
+  "sales_velocity": {
+    "weight": 2.0,
+    "description": "Daily sales rate. Core metric - proves real demand.",
+    "p50": 0.8,
+    "p75": 2.1,
+    "bins": [0.5, 1, 2, 5, 10]
+  },
+  "profit": {
+    "weight": 1.5,
+    "description": "Gross profit rate. P50=64%.",
+    "p50": 64,
+    "bins": [40, 50, 60, 70]
+  },
+  "entry_barrier": {
+    "weight": 1.5,
+    "description": "Review barrier. Lower reviews = easier to enter.",
+    "p50": 14,
+    "p90": 70,
+    "bins": [10, 30, 50, 100]
+  },
+  "organic_health": {
+    "weight": 1.2,
+    "description": "Organic traffic %. P50=96% organic.",
+    "p50": 96,
+    "bins": [30, 50, 70, 90]
+  },
+  "growth_potential": {
+    "weight": 1.2,
+    "description": "Days on shelf x daily sales cross-score. Newer + higher sales = better.",
+    "note": "Replaces old binary newbie RED gate"
+  },
+  "price_sweetspot": {
+    "weight": 1.0,
+    "description": "Price within proven sweet spot. P25=$28 P75=$40.",
+    "bins": [[25,35,10], [20,45,8], [15,50,6], [10,60,4]]
+  },
+  "traffic_breadth": {
+    "weight": 1.0,
+    "description": "Number of traffic keywords. P50=25.",
+    "p50": 25,
+    "bins": [5, 10, 25, 40]
+  },
+  "competitive_position": {
+    "weight": 0.8,
+    "description": "BSR rank. P25=63K P50=168K.",
+    "p50": 168000,
+    "bins": [30000, 100000, 300000, 1000000]
+  },
+  "listing_quality": {
+    "weight": 0.5,
+    "description": "Variations + A+ content. Bonus dimension.",
+    "note": "Variations≥5(+4), Variations≥2(+3), A+(+4), base=2"
+  },
+  "tiers": {
+    "S": 70,
+    "A": 55,
+    "B": 40,
+    "C": 0
+  }
+}
