@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pickflow-mcp-server"
+version = "0.1.0"
+description = "Sorftime-powered Amazon product discovery MCP server. ABA keyword pool, market screening, ASIN discovery, nine-dimension scoring."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+authors = [
+    {name = "pickflow", email = "noreply@github.com"}
+]
+keywords = ["mcp", "amazon", "sorftime", "product-research", "pickflow"]
+
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=1.3.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/zhan-1002/sorftime-pickflow-skill"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["pickflow_mcp_server"]
+
+[project.scripts]
+pickflow-mcp-server = "pickflow_mcp_server.server:main"
