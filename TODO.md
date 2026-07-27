@@ -50,6 +50,16 @@
 
 ## Future
 
+- [x] **1688 API exploration (sorftime)** — tested `ali1688_similar_product` + `product_search_from_image`
+  
+  Works for discovery (img search 100 + kw search 100 → 198 unique). Image search → MUST_MATCH filter
+  narrows to ~30 candidates. But sorftime 1688 API only returns 16 fields (title, price, sales, store…)
+  — no product description or material/attribute fields. Cannot distinguish product form factor
+  (ball vs cross vs sign) from title alone. On hold until API adds description field.
+  
+  Strategy confirmed: img search 5p + kw search 1p → merge → MUST_MATCH core attrs → EXCLUDE noise.
+  Pending: `supplier_lookup` MCP tool. Blocked by API field limitation.
+
 - [ ] **1688 Official API integration** — supplier cost lookup and fba_profit automation
 
   Current `fba_profit` tool requires manual purchase cost input. Integrating supplier pricing
