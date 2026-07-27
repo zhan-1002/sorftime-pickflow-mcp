@@ -124,6 +124,8 @@ class ProductFingerprint(StrictModel):
     components: list[str] = Field(default_factory=list)
     dimensions: ProductDimensions | None = None
     item_weight: Measurement | None = None
+    package_dimensions: ProductDimensions | None = None
+    package_weight: Measurement | None = None
     package_quantity: float | None = Field(default=None, gt=0)
     package_unit: str | None = None
     model_number: str | None = None

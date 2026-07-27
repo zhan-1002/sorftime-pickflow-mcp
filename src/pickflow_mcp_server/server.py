@@ -15,6 +15,8 @@ from .api import (
     product_search,
     product_detail,
     product_traffic_terms_all,
+    ali1688_similar_product,
+    ali1688_product_search_from_image,
 )
 
 def _parse_review_stats(stats: str) -> tuple[float, float, float, float]:
@@ -101,6 +103,12 @@ from .scoring import (
     score_detailed,
 )
 from .fba import calculate as fba_calc, FBAInput
+from .fingerprint import build_product_fingerprint
+from .supplier_service import (
+    normalize_candidates,
+    compare_fingerprint_to_candidates,
+    build_lookup_result,
+)
 
 mcp = FastMCP("PickFlow")
 
@@ -1030,6 +1038,355 @@ def _diff(results: dict, field: str) -> str:
         return "equal"
     except (ValueError, TypeError):
         return f"A={a}, B={b}"
+
+
+# -----------------------------------------------------------------
+# LAYER 4: 1688 Sourcing Tools
+# -----------------------------------------------------------------
+
+from .supplier_contracts import LookupStatus, MatchVerdict  # noqa: E402
+
+_ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
+
+
+def _valid_asin(asin: str) -> bool:
+    return isinstance(asin, str) and bool(_ASIN_RE.match(asin))
+
+
+@mcp.tool()
+async def asin_fingerprint(
+    asin: str,
+    marketplace: str = "US",
+) -> dict:
+    """
+    Build a normalized product fingerprint from an ASIN's product_detail.
+
+    Extracts identity, brand, model, product type, material, color, quantity,
+    measurements, variation text, bullets, images, and source-field provenance.
+    Reports critical unknowns that will block downstream supplier matching.
+
+    Args:
+        asin: Amazon ASIN (10-character alphanumeric)
+        marketplace: Amazon marketplace (default US)
+
+    USE THIS TOOL WHEN: Starting the 1688 supplier matching workflow for an ASIN.
+    """
+    if not _valid_asin(asin):
+        return {"error": True, "message": "Invalid ASIN — must be exactly 10 uppercase alphanumeric characters", "asin": asin}
+
+    try:
+        result = await product_detail(asin, site=marketplace)
+    except Exception as e:
+        return {"error": True, "message": str(e), "asin": asin}
+
+    if not result or "_error" in result:
+        return {"error": True, "message": "product_detail failed", "asin": asin}
+
+    detail = result.get("data", {})
+    if not isinstance(detail, dict) or not detail:
+        return {"error": True, "message": "Empty product_detail response", "asin": asin}
+
+    try:
+        fingerprint = build_product_fingerprint(asin, detail, marketplace=marketplace)
+    except Exception as e:
+        return {"error": True, "message": f"Fingerprint extraction failed: {e}", "asin": asin}
+
+    return {
+        "success": True,
+        "asin": asin,
+        "fingerprint": fingerprint.model_dump(mode="json"),
+        "warnings": [
+            f"Critical unknown: {u}" for u in fingerprint.critical_unknowns
+        ],
+        "api_calls": 1,
+    }
+
+
+@mcp.tool()
+async def supplier_search(
+    asin: str,
+    search_keyword: str = "",
+) -> dict:
+    """
+    Search 1688.com for supplier candidates matching an ASIN.
+
+    Runs both image search (using the product's main image) and Chinese keyword
+    search. Deduplicates and normalizes results into SupplierCandidate objects.
+
+    Args:
+        asin: Amazon ASIN used for image search and fingerprint extraction
+        search_keyword: Optional Chinese keyword override for text search
+
+    USE THIS TOOL WHEN: After building a fingerprint with asin_fingerprint.
+    """
+    if not _valid_asin(asin):
+        return {"error": True, "message": "Invalid ASIN", "asin": asin}
+
+    # 1. Get product fingerprint for images and search terms
+    api_calls = 1  # product_detail (attempted)
+
+    try:
+        detail_result = await product_detail(asin)
+    except Exception as e:
+        return {
+            "error": True, "message": str(e), "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    if not detail_result or "_error" in detail_result:
+        return {
+            "error": True, "message": "product_detail failed", "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    detail = detail_result.get("data", {})
+    if not isinstance(detail, dict) or not detail:
+        return {
+            "error": True, "message": "Empty product_detail response", "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    try:
+        fingerprint = build_product_fingerprint(asin, detail)
+    except Exception as e:
+        return {
+            "error": True, "message": f"Fingerprint extraction failed: {e}", "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    # 2. Determine search keyword
+    keyword = search_keyword.strip() if search_keyword else fingerprint.title
+    if not keyword:
+        return {
+            "error": True, "message": "No search keyword available", "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    # 3. Run image search (use main image if available)
+    image_results = None
+    image_attempted = 0
+    image_errors: list[str] = []
+    image_succeeded = 0
+    if fingerprint.images:
+        main_image = fingerprint.images[0].url
+        image_attempted = 1
+        try:
+            image_results = await ali1688_product_search_from_image(main_image)
+            image_succeeded = 1
+        except Exception as exc:
+            image_errors.append(str(exc))
+
+    # 4. Run keyword search
+    keyword_results = None
+    keyword_attempted = 0
+    keyword_errors: list[str] = []
+    keyword_succeeded = 0
+    try:
+        keyword_attempted = 1
+        keyword_results = await ali1688_similar_product(keyword)
+        keyword_succeeded = 1
+    except Exception as exc:
+        keyword_errors.append(str(exc))
+
+    api_calls = 1 + image_attempted + keyword_attempted
+
+    # 5. Normalize and deduplicate
+    search_modes_used: list[str] = []
+    if image_succeeded:
+        search_modes_used.append("image_search")
+    if keyword_succeeded:
+        search_modes_used.append("keyword_search")
+
+    warnings: list[str] = []
+    if image_attempted and not image_succeeded:
+        warnings.append(f"Image search failed: {image_errors[0] if image_errors else 'unknown'}")
+    if keyword_attempted and not keyword_succeeded:
+        warnings.append(f"Keyword search failed: {keyword_errors[0] if keyword_errors else 'unknown'}")
+
+    if not image_succeeded and not keyword_succeeded:
+        return {
+            "success": False,
+            "asin": asin,
+            "candidates": [],
+            "candidate_count": 0,
+            "api_calls": api_calls,
+            "api_calls_attempted": api_calls,
+            "search_modes_used": [],
+            "warnings": warnings + ["Both search methods failed — no candidates retrieved."],
+        }
+
+    try:
+        candidates = normalize_candidates(image_results, keyword_results)
+    except Exception as e:
+        return {
+            "error": True,
+            "message": f"Candidate normalization failed: {e}",
+            "asin": asin,
+            "api_calls_attempted": api_calls,
+        }
+
+    return {
+        "success": True,
+        "asin": asin,
+        "candidates": [c.model_dump(mode="json") for c in candidates],
+        "candidate_count": len(candidates),
+        "api_calls": api_calls,
+        "search_modes_used": search_modes_used,
+        "warnings": warnings or None,
+    }
+
+
+@mcp.tool()
+async def supplier_compare_prepare(
+    asin: str,
+) -> dict:
+    """
+    Run deterministic comparison between an Amazon product and 1688 candidates.
+
+    Applies hard mismatch gates, records structured evidence, and produces a
+    VisualReviewBundle for at most 5 best non-rejected candidates.
+
+    No LLM or vision API is called — this is purely deterministic.
+
+    Args:
+        asin: Amazon ASIN to compare against supplier candidates
+
+    USE THIS TOOL WHEN: After supplier_search returns candidates to evaluate.
+    """
+    if not _valid_asin(asin):
+        return {"error": True, "message": "Invalid ASIN", "asin": asin}
+
+    # 1. Fingerprint
+    api_calls = 1  # product_detail (attempted)
+
+    try:
+        detail_result = await product_detail(asin)
+    except Exception as e:
+        return build_lookup_result(
+            status=LookupStatus.ERROR,
+            error_code="DETAIL_FETCH_FAILED",
+            warnings=[str(e)],
+            api_calls=api_calls,
+        ).model_dump(mode="json")
+
+    if not detail_result or "_error" in detail_result:
+        return build_lookup_result(
+            status=LookupStatus.ERROR,
+            error_code="DETAIL_EMPTY",
+            warnings=["product_detail returned no usable data"],
+            api_calls=api_calls,
+        ).model_dump(mode="json")
+
+    detail = detail_result.get("data", {})
+    if not isinstance(detail, dict) or not detail:
+        return build_lookup_result(
+            status=LookupStatus.ERROR,
+            error_code="DETAIL_EMPTY",
+            warnings=["product_detail data is empty"],
+            api_calls=api_calls,
+        ).model_dump(mode="json")
+
+    try:
+        fingerprint = build_product_fingerprint(asin, detail)
+    except Exception as e:
+        return build_lookup_result(
+            status=LookupStatus.ERROR,
+            error_code="FINGERPRINT_FAILED",
+            warnings=[str(e)],
+            api_calls=api_calls,
+        ).model_dump(mode="json")
+
+    # 2. Run searches — count all attempted calls
+    image_results = None
+    image_attempted = 0
+    image_errors: list[str] = []
+    image_succeeded = 0
+
+    keyword_results = None
+    keyword_attempted = 0
+    keyword_errors: list[str] = []
+    keyword_succeeded = 0
+
+    if fingerprint.images:
+        image_attempted = 1
+        try:
+            image_results = await ali1688_product_search_from_image(fingerprint.images[0].url)
+            image_succeeded = 1
+        except Exception as exc:
+            image_errors.append(str(exc))
+
+    keyword = fingerprint.title
+    if keyword:
+        keyword_attempted = 1
+        try:
+            keyword_results = await ali1688_similar_product(keyword)
+            keyword_succeeded = 1
+        except Exception as exc:
+            keyword_errors.append(str(exc))
+
+    api_calls = 1 + image_attempted + keyword_attempted
+
+    # 3. Collect all warnings
+    collect_warnings: list[str] = []
+    if image_attempted and not image_succeeded:
+        collect_warnings.append(f"Image search failed: {image_errors[0] if image_errors else 'unknown'}")
+    if keyword_attempted and not keyword_succeeded:
+        collect_warnings.append(f"Keyword search failed: {keyword_errors[0] if keyword_errors else 'unknown'}")
+
+    if not image_succeeded and not keyword_succeeded:
+        return build_lookup_result(
+            status=LookupStatus.PARTIAL,
+            fingerprint=fingerprint,
+            candidates=[],
+            comparisons=[],
+            api_calls=api_calls,
+            warnings=collect_warnings + ["Both search methods failed — no candidates."],
+        ).model_dump(mode="json")
+
+    candidates = normalize_candidates(image_results, keyword_results)
+
+    # 4. Deterministic comparison
+    comparisons, bundle = compare_fingerprint_to_candidates(fingerprint, candidates)
+
+    # 5. Status and warnings
+    if not candidates:
+        return build_lookup_result(
+            status=LookupStatus.PARTIAL,
+            fingerprint=fingerprint,
+            candidates=[],
+            comparisons=[],
+            api_calls=api_calls,
+            warnings=collect_warnings + ["No supplier candidates found from either search method."],
+        ).model_dump(mode="json")
+
+    status = LookupStatus.SUCCESS
+    if fingerprint.critical_unknowns:
+        status = LookupStatus.PARTIAL
+        for u in fingerprint.critical_unknowns:
+            collect_warnings.append(f"Critical unknown in fingerprint: {u}")
+
+    different_count = sum(1 for c in comparisons if c.verdict == MatchVerdict.DIFFERENT)
+    if different_count == len(comparisons) and len(comparisons) > 0:
+        status = LookupStatus.PARTIAL
+        collect_warnings.append("All candidates rejected by deterministic gates.")
+
+    if not image_succeeded or not keyword_succeeded:
+        status = LookupStatus.PARTIAL
+
+    return build_lookup_result(
+        status=status,
+        fingerprint=fingerprint,
+        candidates=candidates,
+        comparisons=comparisons,
+        bundle=bundle,
+        api_calls=api_calls,
+        warnings=collect_warnings,
+    ).model_dump(mode="json")
+
+
+# -----------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------
 
 
 def main():

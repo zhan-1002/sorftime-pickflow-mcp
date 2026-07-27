@@ -2,7 +2,7 @@
 
 ## Now
 
-- [x] 16-tool MCP server (cache + pipeline + analysis + session)
+- [x] 19-tool MCP server (cache + pipeline + analysis + session + 1688 sourcing)
 - [x] Versioned nine-dimension scoring (`v1_legacy` reproduces 97-ASIN S+A=79.4%; `v2_semantic` is the corrected default)
 - [x] Three-state hard filters (pass/fail/unknown) without treating missing fields as zero
 - [x] SQLite ABA cache + keyword_detail result cache (7d TTL)
@@ -70,11 +70,18 @@
   
   Works for discovery (img search 100 + kw search 100 → 198 unique). Image search → MUST_MATCH filter
   narrows to ~30 candidates. But sorftime 1688 API only returns 16 fields (title, price, sales, store…)
-  — no product description or material/attribute fields. Cannot distinguish product form factor
-  (ball vs cross vs sign) from title alone. On hold until API adds description field.
+  — no supplier-side product description or material/attribute fields. Cannot distinguish product
+  form factor (ball vs cross vs sign) from title alone without visual/browser evidence.
   
   Strategy confirmed: img search 5p + kw search 1p → merge → MUST_MATCH core attrs → EXCLUDE noise.
-  Pending: `supplier_lookup` MCP tool. Blocked by API field limitation.
+  The first backend slice is now implemented; exact identity still requires Codex visual review
+  and browser verification.
+
+- [x] **1688 backend vertical slice** — deterministic fingerprint extractor, 1688 API adapters,
+  candidate deduplication, hard mismatch gates, VisualReviewBundle for Codex vision. 3 MCP tools
+  (`asin_fingerprint`, `supplier_search`, `supplier_compare_prepare`). 95 synthetic tests; full
+  suite 120/120. Live smoke verified product detail, image search, keyword search, and all 3 tools
+  without committing private identifiers or raw responses. Pending: Codex plugin/skill integration.
 
 - [ ] **1688 Official API integration** — supplier cost lookup and fba_profit automation
 

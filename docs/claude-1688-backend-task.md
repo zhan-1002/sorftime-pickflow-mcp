@@ -25,7 +25,7 @@ Add a deterministic extractor for Sorftime `product_detail` responses.
 Add API client wrappers for the already verified Sorftime operations:
 
 - `ali1688_similar_product`
-- `product_search_from_image`
+- `ali1688_product_search_from_image`
 
 Normalize their responses into `SupplierCandidate` and `PriceTier`. Handle empty data, non-JSON responses, partial rows, and endpoint errors without crashing the entire lookup.
 

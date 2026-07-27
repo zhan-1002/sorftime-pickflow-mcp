@@ -51,6 +51,8 @@ ASIN
 
 The Amazon-side fingerprint is the reference truth. Previous calls discarded useful product identity fields, so normalization must preserve their meaning even though raw responses remain internal.
 
+Item dimensions/weight and package dimensions/weight are separate contract fields. Shipping-package measurements must never be used as product-form evidence.
+
 ## Evidence policy
 
 Evidence precedence is:

@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import httpx
 
 from .config import SWEETSPOT, get_api_url
+
+# Sorftime authenticates through the endpoint query string. httpx's INFO
+# request log includes the complete URL, so keep transport logging at WARNING
+# even when the MCP host configures the root logger at INFO.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 DEFAULT_TIMEOUT_SECONDS = 25.0
 DEFAULT_RETRIES = 3
@@ -241,3 +248,15 @@ async def product_traffic_terms_all(
 
 async def keyword_extends(kw: str, page: int = 1, site: str = "US") -> dict | None:
     return await call("keyword_extends", {"keyword": kw, "keyword_support_site": site, "page": page})
+
+
+# ---------- 1688 sourcing endpoints ----------
+
+async def ali1688_similar_product(search_name: str, page: int = 1, site: str = "1688") -> dict | None:
+    """Search 1688.com for supplier listings matching a product keyword."""
+    return await call("ali1688_similar_product", {"search_name": search_name, "page": page, "site": site})
+
+
+async def ali1688_product_search_from_image(image_url: str, page: int = 1, site: str = "1688") -> dict | None:
+    """Search 1688.com by image URL for visually similar supplier listings."""
+    return await call("ali1688_product_search_from_image", {"image_url": image_url, "page": page, "site": site})
