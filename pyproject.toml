@@ -29,7 +29,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/zhan-1002/sorftime-pickflow-skill"
+Repository = "https://github.com/zhan-1002/sorftime-pickflow-mcp"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -37,3 +37,4 @@ packages = ["pickflow_mcp_server"]
 
 [project.scripts]
 pickflow-mcp-server = "pickflow_mcp_server.server:main"
+pickflow-evaluate = "pickflow_mcp_server.evaluation:main"

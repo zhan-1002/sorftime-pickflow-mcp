@@ -14,7 +14,7 @@ from .api import (
     keyword_list,
     product_search,
     product_detail,
-    product_traffic_terms,
+    product_traffic_terms_all,
 )
 
 def _parse_review_stats(stats: str) -> tuple[float, float, float, float]:
@@ -92,7 +92,14 @@ from .cache import (
     term_distribution,
     clear_cache,
 )
-from .scoring import score, parse_exposure_items, check_hard_filters
+from .scoring import (
+    DEFAULT_SCORING_VERSION,
+    SUPPORTED_SCORING_VERSIONS,
+    WEIGHTS,
+    evaluate_hard_filters,
+    parse_exposure_items,
+    score_detailed,
+)
 from .fba import calculate as fba_calc, FBAInput
 
 mcp = FastMCP("PickFlow")
@@ -301,14 +308,20 @@ async def market_screen(pool_keywords: str, limit: int = 80,
         from .cache import get_market_cache, store_market_cache
         hit, cached = get_market_cache(kw_text)
         if hit:
-            return {
-                "keyword": kw_text, "monthly_search_volume": cached["monthly_sv"],
-                "cpc": cached["cpc"], "competitors": cached["competitors"],
-                "rev_below_100_pct": cached["rev100"], "non_amazon_pct": cached["non_bs"],
-                "peak_season": "", "market_score": _calc_market_score(cached["monthly_sv"], cached["rev100"], cached["non_bs"]),
-                "tier": _calc_tier(cached["monthly_sv"], cached["rev100"], cached["non_bs"]),
-                "cached": True,
-            }
+            details = cached.get("details", {})
+            return _build_market_result(
+                keyword=kw_text,
+                monthly_sv=cached["monthly_sv"],
+                cpc=cached["cpc"],
+                competitors=cached["competitors"],
+                rev100=cached["rev100"],
+                rev300=details.get("rev300", 0.0),
+                rev500=details.get("rev500", 0.0),
+                non_bs=cached["non_bs"],
+                peak=details.get("peak_season", ""),
+                enriched=details.get("enriched", {}),
+                cached=True,
+            )
 
         # API call with semaphore
         async with sem:
@@ -330,31 +343,29 @@ async def market_screen(pool_keywords: str, limit: int = 80,
         # Enriched fields (zero extra API)
         enriched = _extract_enriched(d)
 
-        # Store cache (core fields only — enriched is bonus metadata)
-        store_market_cache(kw_text, ms, cpc, comp, rev100, non_bs)
+        store_market_cache(
+            kw_text, ms, cpc, comp, rev100, non_bs,
+            details={
+                "rev300": rev300,
+                "rev500": rev500,
+                "peak_season": peak,
+                "enriched": enriched,
+            },
+        )
 
-        return {
-            "keyword": kw_text, "monthly_search_volume": ms, "cpc": cpc,
-            "competitors": comp, "rev_below_100_pct": rev100,
-            "rev_below_300_pct": rev300, "rev_below_500_pct": rev500,
-            "non_amazon_pct": non_bs, "peak_season": peak,
-            "ad_rev_below_100_pct": enriched.get("ad_rev100"),
-            "ad_rev_below_300_pct": enriched.get("ad_rev300"),
-            "brand_cr3_pct": enriched.get("brand_cr3"),
-            "brand_count": enriched.get("brand_count"),
-            "seller_cr3_pct": enriched.get("seller_cr3"),
-            "seller_count": enriched.get("seller_count"),
-            "coupon_count": enriched.get("coupon_count"),
-            "coupon_pct": enriched.get("coupon_pct"),
-            "avg_reviews": enriched.get("avg_reviews"),
-            "avg_stars": enriched.get("avg_stars"),
-            "price_range": {"min": enriched.get("price_min"), "max": enriched.get("price_max"), "median": enriched.get("price_median")},
-            "top_brands": enriched.get("top_brands", []),
-            "top_sellers": enriched.get("top_sellers", []),
-            "market_score": _calc_market_score(ms, rev100, non_bs),
-            "tier": _calc_tier(ms, rev100, non_bs),
-            "cached": False,
-        }
+        return _build_market_result(
+            keyword=kw_text,
+            monthly_sv=ms,
+            cpc=cpc,
+            competitors=comp,
+            rev100=rev100,
+            rev300=rev300,
+            rev500=rev500,
+            non_bs=non_bs,
+            peak=peak,
+            enriched=enriched,
+            cached=False,
+        )
 
     results = await asyncio.gather(*[screen_one(kw) for kw in eligible])
     markets = [r for r in results if r is not None]
@@ -389,6 +400,44 @@ def _calc_market_score(ms: int, rev100: float, non_bs: float) -> float:
 def _calc_tier(ms: int, rev100: float, non_bs: float) -> str:
     score = _calc_market_score(ms, rev100, non_bs)
     return "S" if score >= 5 else "A" if score >= 3.5 else "B"
+
+
+def _build_market_result(*, keyword: str, monthly_sv: int, cpc: float,
+                         competitors: int, rev100: float, rev300: float,
+                         rev500: float, non_bs: float, peak: str,
+                         enriched: dict, cached: bool) -> dict:
+    """Build the stable market_screen item contract for cache hits and misses."""
+    return {
+        "keyword": keyword,
+        "monthly_search_volume": monthly_sv,
+        "cpc": cpc,
+        "competitors": competitors,
+        "rev_below_100_pct": rev100,
+        "rev_below_300_pct": rev300,
+        "rev_below_500_pct": rev500,
+        "non_amazon_pct": non_bs,
+        "peak_season": peak,
+        "ad_rev_below_100_pct": enriched.get("ad_rev100"),
+        "ad_rev_below_300_pct": enriched.get("ad_rev300"),
+        "brand_cr3_pct": enriched.get("brand_cr3"),
+        "brand_count": enriched.get("brand_count"),
+        "seller_cr3_pct": enriched.get("seller_cr3"),
+        "seller_count": enriched.get("seller_count"),
+        "coupon_count": enriched.get("coupon_count"),
+        "coupon_pct": enriched.get("coupon_pct"),
+        "avg_reviews": enriched.get("avg_reviews"),
+        "avg_stars": enriched.get("avg_stars"),
+        "price_range": {
+            "min": enriched.get("price_min"),
+            "max": enriched.get("price_max"),
+            "median": enriched.get("price_median"),
+        },
+        "top_brands": enriched.get("top_brands", []),
+        "top_sellers": enriched.get("top_sellers", []),
+        "market_score": _calc_market_score(monthly_sv, rev100, non_bs),
+        "tier": _calc_tier(monthly_sv, rev100, non_bs),
+        "cached": cached,
+    }
 
 
 @mcp.tool()
@@ -462,18 +511,27 @@ async def asin_discover(markets_json: str, price_min: int = 0, price_max: int = 
 
 
 @mcp.tool()
-async def asin_score(asin: str, include_detail: bool = False) -> dict:
+async def asin_score(
+    asin: str,
+    include_detail: bool = False,
+    scoring_version: str = DEFAULT_SCORING_VERSION,
+    traffic_pages: int = 2,
+) -> dict:
     """
     Score a single ASIN on nine dimensions.
 
-    Returns total score (0-100), tier (S/A/B/C), and dimension breakdown.
+    Returns total score (0-100), tier (S/A/B/C), dimension breakdown, data
+    completeness and score confidence. Supported scoring versions are
+    v1_legacy and v2_semantic (default).
     Set include_detail=True to get full product detail fields.
 
     USE THIS TOOL WHEN: Evaluating a specific ASIN's viability.
     """
     try:
         d_result = await product_detail(asin)
-        t_result = await product_traffic_terms(asin, page=1)
+        traffic_result = await product_traffic_terms_all(
+            asin, max_pages=max(1, min(traffic_pages, 10))
+        )
     except Exception as e:
         return {"error": True, "message": str(e), "asin": asin}
 
@@ -481,23 +539,34 @@ async def asin_score(asin: str, include_detail: bool = False) -> dict:
         return {"error": True, "message": "product_detail failed", "asin": asin}
 
     detail = d_result.get("data", {})
-    t_items = []
-    if t_result and "_error" not in t_result:
-        t_items = t_result.get("data", [])
-        if isinstance(t_items, dict):
-            t_items = [t_items]
+    if scoring_version not in SUPPORTED_SCORING_VERSIONS:
+        return {
+            "error": True,
+            "message": f"Unsupported scoring version: {scoring_version}",
+            "supported_versions": list(SUPPORTED_SCORING_VERSIONS),
+            "asin": asin,
+        }
 
-    traffic_count, ad_pct = parse_exposure_items(t_items)
-    total, tier, scores = score(detail, traffic_count, ad_pct)
-    filter_pass, filter_fails = check_hard_filters(detail)
+    if traffic_result.available:
+        traffic_count, ad_pct = parse_exposure_items(traffic_result.items)
+    else:
+        traffic_count, ad_pct = None, None
+
+    scored = score_detailed(detail, traffic_count, ad_pct, scoring_version)
+    filters = evaluate_hard_filters(detail)
 
     result = {
         "asin": asin,
-        "total_score": total,
-        "tier": tier,
-        "tier_final": tier if filter_pass else "F",
-        "hard_filters": {"passed": filter_pass, "failures": filter_fails},
-        "dimensions": scores,
+        "total_score": scored.total_score,
+        "tier": scored.tier,
+        "tier_final": "F" if filters["status"] == "fail" else scored.tier,
+        "scoring_version": scored.scoring_version,
+        "data_completeness": scored.data_completeness,
+        "score_confidence": scored.score_confidence,
+        "missing_dimensions": scored.missing_dimensions,
+        "warnings": scored.warnings,
+        "hard_filters": filters,
+        "dimensions": scored.dimensions,
         "summary": {
             "title": detail.get("title", "")[:80],
             "price": detail.get("price", ""),
@@ -511,9 +580,14 @@ async def asin_score(asin: str, include_detail: bool = False) -> dict:
         "traffic": {
             "total_keywords": traffic_count,
             "ad_dependency_pct": ad_pct,
-            "organic_pct": round(100 - ad_pct, 1),
+            "organic_pct": round(100 - ad_pct, 1) if ad_pct is not None else None,
+            "pages_requested": traffic_result.pages_requested,
+            "pages_succeeded": traffic_result.pages_succeeded,
+            "complete": traffic_result.complete,
+            "duplicates_removed": traffic_result.duplicates_removed,
+            "page_errors": traffic_result.page_errors,
         },
-        "weights_used": {k: round(v, 1) for k, v in scoring.WEIGHTS.items()},
+        "weights_used": {k: round(v, 1) for k, v in WEIGHTS.items()},
     }
 
     if include_detail:
@@ -524,7 +598,9 @@ async def asin_score(asin: str, include_detail: bool = False) -> dict:
 
 @mcp.tool()
 async def asin_score_batch(asins_json: str, limit: int = 50,
-                            concurrency: int = 5) -> dict:
+                            concurrency: int = 5,
+                            scoring_version: str = DEFAULT_SCORING_VERSION,
+                            traffic_pages: int = 2) -> dict:
     """
     Score multiple ASINs and rank by total score. Uses concurrent API calls.
 
@@ -536,6 +612,13 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
     USE THIS TOOL WHEN: Scoring all ASINs discovered by asin_discover.
     """
     sem = asyncio.Semaphore(max(1, min(concurrency, 10)))
+
+    if scoring_version not in SUPPORTED_SCORING_VERSIONS:
+        return {
+            "error": True,
+            "message": f"Unsupported scoring version: {scoring_version}",
+            "supported_versions": list(SUPPORTED_SCORING_VERSIONS),
+        }
 
     try:
         asins = json.loads(asins_json)
@@ -559,7 +642,9 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
         async with sem:
             try:
                 d_result = await product_detail(asin)
-                t_result = await product_traffic_terms(asin, page=1)
+                traffic_result = await product_traffic_terms_all(
+                    asin, max_pages=max(1, min(traffic_pages, 10))
+                )
             except Exception:
                 return None
 
@@ -567,15 +652,12 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
                 return None
 
             detail = d_result.get("data", {})
-            t_items = []
-            if t_result and "_error" not in t_result:
-                t_items = t_result.get("data", [])
-                if isinstance(t_items, dict):
-                    t_items = [t_items]
-
-            traffic_count, ad_pct = parse_exposure_items(t_items)
-            total, tier, scores = score(detail, traffic_count, ad_pct)
-            filter_pass, filter_fails = check_hard_filters(detail)
+            if traffic_result.available:
+                traffic_count, ad_pct = parse_exposure_items(traffic_result.items)
+            else:
+                traffic_count, ad_pct = None, None
+            scored = score_detailed(detail, traffic_count, ad_pct, scoring_version)
+            filters = evaluate_hard_filters(detail)
 
             return {
                 "asin": asin, "title": detail.get("title", "")[:80],
@@ -584,10 +666,16 @@ async def asin_score_batch(asins_json: str, limit: int = 50,
                 "reviews": detail.get("review_count", ""),
                 "stars": detail.get("star_rating", ""),
                 "profit_rate": detail.get("gross_profit_rate", ""),
-                "ad_pct": ad_pct, "total_score": total,
-                "tier": tier, "tier_final": tier if filter_pass else "F",
-                "hard_filters": {"passed": filter_pass, "failures": filter_fails},
-                "scores": {k: v for k, v in scores.items()},
+                "ad_pct": ad_pct, "total_score": scored.total_score,
+                "tier": scored.tier,
+                "tier_final": "F" if filters["status"] == "fail" else scored.tier,
+                "scoring_version": scored.scoring_version,
+                "data_completeness": scored.data_completeness,
+                "score_confidence": scored.score_confidence,
+                "missing_dimensions": scored.missing_dimensions,
+                "hard_filters": filters,
+                "traffic_complete": traffic_result.complete,
+                "scores": scored.dimensions,
             }
 
     results_raw = await asyncio.gather(*[score_one(asin) for asin in asin_list])
@@ -662,28 +750,23 @@ async def keyword_analyze(keyword: str) -> dict:
 
 
 @mcp.tool()
-async def asin_reverse_traffic(asin: str) -> dict:
+async def asin_reverse_traffic(asin: str, max_pages: int = 2) -> dict:
     """
     Reverse-lookup traffic keywords for an ASIN and check cache coverage.
 
     USE THIS TOOL WHEN: Checking if an existing product's keywords are covered by the ABA cache.
     """
-    traffic_kws = []
-    for page in [1, 2]:
-        try:
-            result = await product_traffic_terms(asin, page=page)
-        except Exception:
-            continue
-        if result and "_error" not in result:
-            items = result.get("data", [])
-            if isinstance(items, dict):
-                items = [items]
-            for t in items:
-                traffic_kws.append({
-                    "keyword": t.get("keyword", ""),
-                    "monthly_sv": t.get("monthly_search_volume", 0),
-                    "exposure": t.get("exposure_position", ""),
-                })
+    traffic_result = await product_traffic_terms_all(
+        asin, max_pages=max(1, min(max_pages, 10))
+    )
+    traffic_kws = [
+        {
+            "keyword": item.get("keyword", ""),
+            "monthly_sv": item.get("monthly_search_volume", 0),
+            "exposure": item.get("exposure_position", ""),
+        }
+        for item in traffic_result.items
+    ]
 
     ad_count = sum(1 for k in traffic_kws if "Ad" in (k["exposure"] or ""))
 
@@ -706,21 +789,42 @@ async def asin_reverse_traffic(asin: str) -> dict:
         "cached_keywords": cached[:20],
         "uncached_top": [k["keyword"] for k in traffic_kws if k["keyword"] not in cached][:10],
         "top_traffic": sorted(traffic_kws, key=lambda k: k["monthly_sv"] or 0, reverse=True)[:10],
+        "traffic_fetch": {
+            "available": traffic_result.available,
+            "complete": traffic_result.complete,
+            "pages_requested": traffic_result.pages_requested,
+            "pages_succeeded": traffic_result.pages_succeeded,
+            "duplicates_removed": traffic_result.duplicates_removed,
+            "page_errors": traffic_result.page_errors,
+        },
     }
 
 
 @mcp.tool()
-async def asin_compare(asin_a: str, asin_b: str) -> dict:
+async def asin_compare(
+    asin_a: str,
+    asin_b: str,
+    scoring_version: str = DEFAULT_SCORING_VERSION,
+    traffic_pages: int = 2,
+) -> dict:
     """
     Side-by-side nine-dimension comparison of two ASINs.
 
     USE THIS TOOL WHEN: Deciding between two competitor products to benchmark against.
     """
     results = {}
+    if scoring_version not in SUPPORTED_SCORING_VERSIONS:
+        return {
+            "error": True,
+            "message": f"Unsupported scoring version: {scoring_version}",
+            "supported_versions": list(SUPPORTED_SCORING_VERSIONS),
+        }
     for label, asin in [("A", asin_a), ("B", asin_b)]:
         try:
             d = await product_detail(asin)
-            t = await product_traffic_terms(asin, page=1)
+            traffic_result = await product_traffic_terms_all(
+                asin, max_pages=max(1, min(traffic_pages, 10))
+            )
         except Exception:
             results[label] = {"error": "API call failed", "asin": asin}
             continue
@@ -730,13 +834,11 @@ async def asin_compare(asin_a: str, asin_b: str) -> dict:
             continue
 
         detail = d.get("data", {})
-        items = []
-        if t and "_error" not in t:
-            items = t.get("data", [])
-            if isinstance(items, dict):
-                items = [items]
-        tc, ad = parse_exposure_items(items)
-        total, tier, scores = score(detail, tc, ad)
+        if traffic_result.available:
+            tc, ad = parse_exposure_items(traffic_result.items)
+        else:
+            tc, ad = None, None
+        scored = score_detailed(detail, tc, ad, scoring_version)
 
         results[label] = {
             "asin": asin,
@@ -747,9 +849,14 @@ async def asin_compare(asin_a: str, asin_b: str) -> dict:
             "stars": detail.get("star_rating", ""),
             "profit_rate": detail.get("gross_profit_rate", ""),
             "ad_pct": ad,
-            "total_score": total,
-            "tier": tier,
-            "dimensions": scores,
+            "total_score": scored.total_score,
+            "tier": scored.tier,
+            "scoring_version": scored.scoring_version,
+            "data_completeness": scored.data_completeness,
+            "score_confidence": scored.score_confidence,
+            "missing_dimensions": scored.missing_dimensions,
+            "traffic_complete": traffic_result.complete,
+            "dimensions": scored.dimensions,
         }
 
     return {

@@ -4,7 +4,7 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 
 > Previously: `sorftime-pickflow-skill`. Consolidated into this repository.
 > `skill/` contains the legacy Claude Code Skill (SKILL.md, methodology, config).
-> `src/` contains the MCP server (15 tools, cache, pipeline, scoring).
+> `src/` contains the MCP server (16 tools, cache, pipeline, scoring).
 
 ## Tools
 
@@ -23,8 +23,8 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 | `pool_build` | Build keyword pool from cache (no API) |
 | `market_screen` | Run keyword_detail + enriched fields (brand CR3, seller CR3, ad review dist, coupon, price range) |
 | `asin_discover` | Find ASINs with sweetspot filters |
-| `asin_score` | Nine-dimension scoring for a single ASIN |
-| `asin_score_batch` | Batch score multiple ASINs |
+| `asin_score` | Versioned nine-dimension scoring with completeness/confidence |
+| `asin_score_batch` | Batch score ASINs with unified traffic pagination |
 
 ### Analysis Layer
 | Tool | Description |
@@ -33,6 +33,7 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 | `asin_reverse_traffic` | Reverse-lookup traffic keywords, check cache coverage |
 | `asin_compare` | Side-by-side ASIN comparison |
 | `pipeline_validate` | Test recall against known-good ASINs |
+| `fba_profit` | Calculate FBA unit economics and hidden fees |
 
 ### Session
 | Tool | Description |
@@ -42,7 +43,7 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 ## Install
 
 ```bash
-git clone git@github.com:zhan-1002/sorftime-pickflow-skill.git
+git clone git@github.com:zhan-1002/sorftime-pickflow-mcp.git
 cd sorftime-pickflow-mcp
 uv sync
 ```
@@ -66,3 +67,29 @@ In `~/.claude.json`, under the project entry, add:
 ```
 
 Requires Sorftime API configured in `~/.mcp.json`.
+
+## Scoring versions
+
+- `v2_semantic` is the default. It treats `monthly_sales_volume` as a monthly
+  estimate (`sales / 30`), preserves missing inputs as missing dimensions, and
+  returns `data_completeness` plus `score_confidence`.
+- `v1_legacy` reproduces the historical formula used for the original 97-ASIN
+  calibration. Use it only for comparison with earlier reports.
+
+Traffic terms are fetched through one pagination and de-duplication path for
+single scoring, batch scoring, reverse traffic and ASIN comparison. Partial or
+failed traffic responses are reported explicitly rather than treated as a true
+zero-keyword result.
+
+## Private evaluation
+
+The repository does not contain evaluation ASINs, keywords or credentials. A
+local CSV named `test_set_parsed.csv` with `asin,keyword` columns can be evaluated
+without printing identifiers:
+
+```bash
+pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 5
+```
+
+Use `--limit 0` for the complete private set. Add `--output` only when an
+anonymous per-case diagnostic JSON is needed; standard output remains aggregate.

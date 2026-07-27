@@ -2,15 +2,31 @@
 
 ## Now
 
-- [x] 15-tool MCP server (cache + pipeline + analysis + session)
-- [x] Nine-dimension weighted scoring (validated on 97 ASINs, S+A=79.4%)
-- [x] Hard disqualification filters (price<$10, zero sales, not FBA)
+- [x] 16-tool MCP server (cache + pipeline + analysis + session)
+- [x] Versioned nine-dimension scoring (`v1_legacy` reproduces 97-ASIN S+A=79.4%; `v2_semantic` is the corrected default)
+- [x] Three-state hard filters (pass/fail/unknown) without treating missing fields as zero
 - [x] SQLite ABA cache + keyword_detail result cache (7d TTL)
 - [x] Concurrent API calls (Semaphore, 5x speedup)
 - [x] Smart skip low-volume keywords
-- [x] 12 unit tests across 3 test files
+- [x] Unified traffic pagination, de-duplication, retries, and partial-failure metadata
+- [x] Private local evaluation CLI with anonymous failure-stage diagnostics
+- [x] 21 unit/regression tests across 4 test files
 
 ## Next
+
+- [ ] **ABA segmented cache pull + recall-depth evaluation**
+
+  Relevant niche traffic terms are concentrated around ABA pages 750-2500,
+  while the current `cache_aba_pull` implementation fetches pages serially.
+  Defer the large live run until API quota is available.
+
+  - Add configurable concurrency (default 5) with bounded retries
+  - Persist per-page status: success, empty, failed, item count, attempts, timestamp
+  - Skip completed pages and support retrying failed pages only
+  - Report progress/checkpoints for segments 750-999, 1000-1499, 1500-1999, 2000-2500
+  - Measure three separate metrics: ABA traffic-keyword coverage, product-search
+    recall at 2/5/10/20 pages, and end-to-end pipeline recall
+  - Track marginal recall, API calls and elapsed time for each additional page range
 
 - [x] **Enriched market_screen** — keyword_detail now returns brand_cr3, seller_cr3, ad_rev100/300, coupon_pct, price_range, top_brands/sellers (zero extra API)
 - [ ] **ASIN detail cache** — cached product_detail results with configurable TTL
