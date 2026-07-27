@@ -7,6 +7,8 @@ Validate three optimizations before push:
 import asyncio
 import time
 
+import pytest
+
 
 # ══════════════════════════════════════════
 # TEST 1: Concurrency
@@ -28,6 +30,7 @@ class MockSlowAPI:
         return {"data": {"asin": asin, "price": 29.99}}
 
 
+@pytest.mark.asyncio
 async def test_semaphore_concurrency():
     """Concurrent calls should be faster than serial."""
     api = MockSlowAPI()
@@ -129,6 +132,7 @@ def test_smart_skip():
 # TEST 4: Integrated Pipeline Speed
 # ══════════════════════════════════════════
 
+@pytest.mark.asyncio
 async def test_integrated_pipeline():
     """Simulate full market_screen with cache + concurrency."""
     from pickflow_mcp_server.cache import (
