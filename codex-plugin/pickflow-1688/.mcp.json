@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pickflow": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["-m", "pickflow_mcp_server"],
+      "cwd": "../..",
+      "env_vars": ["SORFTIME_MCP_URL"],
+      "tool_timeout_sec": 300
+    }
+  }
+}

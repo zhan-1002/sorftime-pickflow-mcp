@@ -1,0 +1,28 @@
+{
+  "name": "pickflow-1688",
+  "version": "0.1.0",
+  "description": "Evidence-backed Amazon-to-1688 supplier matching for Codex.",
+  "author": {
+    "name": "zhan-1002",
+    "url": "https://github.com/zhan-1002"
+  },
+  "homepage": "https://github.com/zhan-1002/sorftime-pickflow-mcp",
+  "repository": "https://github.com/zhan-1002/sorftime-pickflow-mcp",
+  "license": "MIT",
+  "keywords": ["amazon", "1688", "sourcing", "supplier", "sorftime"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Pickflow 1688",
+    "shortDescription": "Verify 1688 suppliers for Amazon products.",
+    "longDescription": "Build an Amazon product fingerprint, search Sorftime 1688 candidates, apply deterministic mismatch gates, and use Codex vision plus the signed-in sidebar browser to verify the strongest supplier matches.",
+    "developerName": "zhan-1002",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read"],
+    "defaultPrompt": [
+      "Find and verify 1688 suppliers for this Amazon ASIN.",
+      "Compare the top 1688 candidates visually and by SKU.",
+      "Check whether this 1688 price is safe for an FBA estimate."
+    ]
+  }
+}

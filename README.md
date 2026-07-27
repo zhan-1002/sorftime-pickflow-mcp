@@ -113,3 +113,13 @@ Price comparability follows strict rules: a unit price is only published when
 SKU, pack quantity, and tier are all known. Ambiguous prices are flagged and
 FBA profit calculation is withheld. See `docs/1688-codex-architecture.md` for
 the full responsibility boundary and evidence policy.
+
+The version-controlled Codex plugin is in `codex-plugin/pickflow-1688/`. It
+starts this repository's `.venv` MCP server through a relative path and reads
+`SORFTIME_MCP_URL` from the plugin host environment; no credential is stored in
+the manifest. Its sourcing skill orchestrates the three backend tools, caps
+visual review at five candidates, and uses the sidebar browser to verify visible
+SKU, pack, MOQ, price-tier, and package-measurement facts. A 1688 security
+slider is treated as `verification_required`: the current tab is handed to the
+user for manual verification instead of being retried or misreported as missing
+product data.

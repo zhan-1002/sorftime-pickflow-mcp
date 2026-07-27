@@ -81,7 +81,16 @@
   candidate deduplication, hard mismatch gates, VisualReviewBundle for Codex vision. 3 MCP tools
   (`asin_fingerprint`, `supplier_search`, `supplier_compare_prepare`). 95 synthetic tests; full
   suite 120/120. Live smoke verified product detail, image search, keyword search, and all 3 tools
-  without committing private identifiers or raw responses. Pending: Codex plugin/skill integration.
+  without committing private identifiers or raw responses.
+
+- [x] **Codex 1688 plugin/skill integration** — versioned under `codex-plugin/pickflow-1688/`
+
+  Official plugin and skill validators pass. The repository-relative MCP configuration performs a
+  real stdio handshake and exposes all 19 tools. One private live smoke used 3 upstream calls to
+  normalize 120 candidates and cap the visual queue at 5; sidebar-browser review verified visible
+  SKU, pack, MOQ, tier-price, and per-SKU package measurement fields without committing identifiers.
+  Security sliders are a recoverable `verification_required` handoff, not a data error. Amazon image
+  render failure remains unknown rather than becoming false positive evidence. Full suite 124/124.
 
 - [ ] **1688 Official API integration** — supplier cost lookup and fba_profit automation
 

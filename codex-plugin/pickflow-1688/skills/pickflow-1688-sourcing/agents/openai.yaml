@@ -1,0 +1,13 @@
+interface:
+  display_name: "Pickflow 1688 Sourcing"
+  short_description: "Compare Amazon products with 1688 suppliers"
+  default_prompt: "Use $pickflow-1688-sourcing to find and verify 1688 suppliers for an Amazon ASIN."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "pickflow"
+      description: "Local Pickflow MCP server for product fingerprints and 1688 candidates"
+
+policy:
+  allow_implicit_invocation: true
