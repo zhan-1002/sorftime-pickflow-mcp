@@ -10,9 +10,23 @@
 - [x] Smart skip low-volume keywords
 - [x] Unified traffic pagination, de-duplication, retries, and partial-failure metadata
 - [x] Private local evaluation CLI with anonymous failure-stage diagnostics
-- [x] 21 unit/regression tests across 4 test files
+- [x] Private sample-set V1 contract: split/status/stage labels, aggregate profile, zero-call validation
+- [x] 132 unit/regression tests across 7 test files
 
 ## Next
+
+- [ ] **Complete private 97-ASIN sample-set V1 annotation and held-out validation**
+
+  The code-side V1 contract and `--validate-only` profile are complete. The
+  private CSV still needs calibration/validation/disputed splits, explicit
+  expected stage labels, product tags and reason codes. Keep identifiers and
+  notes outside Git; publish aggregate agreement and failure-stage counts only.
+
+- [ ] **Archive the current supplier system and build a Feishu demo**
+
+  Manually normalize component material, item/package dimensions and weight,
+  MOQ, supplier capability and BOM versions. The manual 1688 step must emit the
+  same stable records a future automated adapter would produce.
 
 - [ ] **ABA segmented cache pull + recall-depth evaluation**
 

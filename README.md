@@ -91,8 +91,10 @@ zero-keyword result.
 ## Private evaluation
 
 The repository does not contain evaluation ASINs, keywords or credentials. A
-local CSV named `test_set_parsed.csv` with `asin,keyword` columns can be evaluated
-without printing identifiers:
+legacy local CSV named `test_set_parsed.csv` with `asin,keyword` columns remains
+supported. Sample-set V1 additionally records calibration/validation split,
+annotation status, expected discovery/hard-filter/tier/outcome, product tags and
+reason codes without printing identifiers.
 
 ```bash
 pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 5
@@ -100,6 +102,14 @@ pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 5
 
 Use `--limit 0` for the complete private set. Add `--output` only when an
 anonymous per-case diagnostic JSON is needed; standard output remains aggregate.
+Validate and profile V1 labels without making API calls:
+
+```bash
+pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 0 --validate-only --require-v1-labels
+```
+
+See `docs/private-evaluation-schema-v1.md` for the column contract and migration
+sequence for the private 97-ASIN set.
 
 ## 1688 Supplier Matching
 
