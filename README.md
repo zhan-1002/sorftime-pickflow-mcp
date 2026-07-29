@@ -4,7 +4,7 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 
 > Previously: `sorftime-pickflow-skill`. Consolidated into this repository.
 > `skill/` contains the legacy Claude Code Skill (SKILL.md, methodology, config).
-> `src/` contains the MCP server (16 tools, cache, pipeline, scoring).
+> `src/` contains the MCP server (19 tools, cache, pipeline, scoring, 1688 sourcing).
 
 ## Tools
 
@@ -34,6 +34,13 @@ Model Context Protocol server + Skill for Amazon product discovery. Powered by S
 | `asin_compare` | Side-by-side ASIN comparison |
 | `pipeline_validate` | Test recall against known-good ASINs |
 | `fba_profit` | Calculate FBA unit economics and hidden fees |
+
+### 1688 Sourcing Layer
+| Tool | Description |
+|------|-------------|
+| `asin_fingerprint` | Build normalized product fingerprint from Sorftime product_detail |
+| `supplier_search` | Search 1688.com via image + keyword, deduplicate candidates |
+| `supplier_compare_prepare` | Deterministic comparison gates + VisualReviewBundle for Codex vision |
 
 ### Session
 | Tool | Description |
@@ -84,8 +91,10 @@ zero-keyword result.
 ## Private evaluation
 
 The repository does not contain evaluation ASINs, keywords or credentials. A
-local CSV named `test_set_parsed.csv` with `asin,keyword` columns can be evaluated
-without printing identifiers:
+legacy local CSV named `test_set_parsed.csv` with `asin,keyword` columns remains
+supported. Sample-set V1 additionally records calibration/validation split,
+annotation status, expected discovery/hard-filter/tier/outcome, product tags and
+reason codes without printing identifiers.
 
 ```bash
 pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 5
@@ -93,3 +102,34 @@ pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 5
 
 Use `--limit 0` for the complete private set. Add `--output` only when an
 anonymous per-case diagnostic JSON is needed; standard output remains aggregate.
+Validate and profile V1 labels without making API calls:
+
+```bash
+pickflow-evaluate --data-dir "D:/private/pickflow-eval" --limit 0 --validate-only --require-v1-labels
+```
+
+See `docs/private-evaluation-schema-v1.md` for the column contract and migration
+sequence for the private 97-ASIN set.
+
+## 1688 Supplier Matching
+
+The `asin_fingerprint` → `supplier_search` → `supplier_compare_prepare` pipeline
+builds a product fingerprint, searches 1688.com by image and keyword, deduplicates
+candidates, and records deterministic evidence for product form, material,
+item/package dimensions, and quantity. At most five non-rejected candidates are packaged into a
+`VisualReviewBundle` for Codex-native vision review.
+
+Price comparability follows strict rules: a unit price is only published when
+SKU, pack quantity, and tier are all known. Ambiguous prices are flagged and
+FBA profit calculation is withheld. See `docs/1688-codex-architecture.md` for
+the full responsibility boundary and evidence policy.
+
+The version-controlled Codex plugin is in `codex-plugin/pickflow-1688/`. It
+starts this repository's `.venv` MCP server through a relative path and reads
+`SORFTIME_MCP_URL` from the plugin host environment; no credential is stored in
+the manifest. Its sourcing skill orchestrates the three backend tools, caps
+visual review at five candidates, and uses the sidebar browser to verify visible
+SKU, pack, MOQ, price-tier, and package-measurement facts. A 1688 security
+slider is treated as `verification_required`: the current tab is handed to the
+user for manual verification instead of being retried or misreported as missing
+product data.

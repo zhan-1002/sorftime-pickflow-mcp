@@ -12,6 +12,7 @@ import asyncio
 import csv
 import json
 import os
+import re
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -26,11 +27,243 @@ from .api import (
     product_traffic_terms_all,
 )
 from .config import CACHE_DB
-from .scoring import DEFAULT_SCORING_VERSION, SUPPORTED_SCORING_VERSIONS, parse_exposure_items, score_detailed
+from .scoring import (
+    DEFAULT_SCORING_VERSION,
+    SUPPORTED_SCORING_VERSIONS,
+    evaluate_hard_filters,
+    parse_exposure_items,
+    score_detailed,
+)
 
 SearchFn = Callable[..., Awaitable[dict | None]]
 DetailFn = Callable[..., Awaitable[dict | None]]
 TrafficFn = Callable[..., Awaitable[TrafficTermsResult]]
+
+SAMPLE_SCHEMA_VERSION = "1.0"
+DATASET_SPLITS = {"unassigned", "calibration", "validation", "disputed"}
+LABEL_STATUSES = {"unlabeled", "confirmed", "disputed"}
+EXPECTED_DISCOVERY = {"unknown", "found", "not_found"}
+EXPECTED_HARD_FILTER = {"unknown", "pass", "fail"}
+EXPECTED_TIERS = {"unknown", "S", "A", "B", "C"}
+EXPECTED_OUTCOMES = {"unknown", "select", "reject", "review"}
+MARKETPLACES = {
+    "US", "GB", "DE", "FR", "IN", "CA", "JP",
+    "ES", "IT", "MX", "AE", "AU", "BR", "SA",
+}
+_ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
+_SAFE_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _tokens(value: Any) -> list[str]:
+    """Split flat CSV tags without exposing row contents in diagnostics."""
+    return [
+        token.strip().lower()
+        for token in re.split(r"[|,;]", str(value or ""))
+        if token.strip()
+    ]
+
+
+def _label(record: dict[str, str], key: str, default: str) -> str:
+    value = str(record.get(key, "")).strip()
+    return value if value else default
+
+
+def _optional_label(record: dict[str, str], key: str) -> str | None:
+    value = str(record.get(key, "")).strip()
+    return value if value else None
+
+
+def validate_sample_records(
+    records: list[dict[str, str]],
+    *,
+    require_v1: bool = False,
+) -> dict[str, Any]:
+    """Validate private sample metadata and return anonymous aggregate diagnostics.
+
+    Legacy ``asin,keyword`` files remain valid in non-strict mode. V1 adds
+    split, annotation status and stage expectations so calibration and held-out
+    validation results cannot be mixed accidentally.
+    """
+    issues: list[dict[str, str]] = []
+    split_counts: Counter[str] = Counter()
+    label_counts: Counter[str] = Counter()
+    outcome_counts: Counter[str] = Counter()
+    tag_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    seen_pairs: set[tuple[str, str]] = set()
+    labeled_records = 0
+    v1_complete_records = 0
+
+    def issue(index: int, level: str, code: str, field: str) -> None:
+        issues.append(
+            {
+                "case_id": f"case-{index + 1:04d}",
+                "level": level,
+                "code": code,
+                "field": field,
+            }
+        )
+
+    if not records:
+        issues.append(
+            {
+                "case_id": "dataset",
+                "level": "error",
+                "code": "empty_dataset",
+                "field": "rows",
+            }
+        )
+
+    for index, record in enumerate(records):
+        asin = str(record.get("asin", "")).strip().upper()
+        keyword = str(record.get("keyword", "")).strip()
+        marketplace = _label(record, "marketplace", "US").upper()
+        schema_version = _label(record, "schema_version", "legacy")
+        dataset_split = _label(record, "dataset_split", "unassigned").lower()
+        label_status = _label(record, "label_status", "unlabeled").lower()
+        expected_discovery_raw = _optional_label(record, "expected_discovery")
+        expected_filter_raw = _optional_label(record, "expected_hard_filter")
+        expected_tier_raw = _optional_label(record, "expected_tier")
+        expected_outcome_raw = _optional_label(record, "expected_outcome")
+        expected_discovery = expected_discovery_raw.lower() if expected_discovery_raw else None
+        expected_filter = expected_filter_raw.lower() if expected_filter_raw else None
+        expected_tier = (
+            expected_tier_raw.upper()
+            if expected_tier_raw and expected_tier_raw.lower() != "unknown"
+            else expected_tier_raw
+        )
+        expected_outcome = expected_outcome_raw.lower() if expected_outcome_raw else None
+
+        if not _ASIN_RE.fullmatch(asin):
+            issue(index, "error", "invalid_asin", "asin")
+        if not keyword:
+            issue(index, "warning", "missing_keyword", "keyword")
+        if marketplace not in MARKETPLACES:
+            issue(index, "error", "unsupported_marketplace", "marketplace")
+        if dataset_split not in DATASET_SPLITS:
+            issue(index, "error", "invalid_dataset_split", "dataset_split")
+            dataset_split = "unassigned"
+        if label_status not in LABEL_STATUSES:
+            issue(index, "error", "invalid_label_status", "label_status")
+            label_status = "unlabeled"
+        if expected_discovery is not None and expected_discovery not in EXPECTED_DISCOVERY:
+            issue(index, "error", "invalid_expected_discovery", "expected_discovery")
+            expected_discovery = None
+        if expected_filter is not None and expected_filter not in EXPECTED_HARD_FILTER:
+            issue(index, "error", "invalid_expected_hard_filter", "expected_hard_filter")
+            expected_filter = None
+        if expected_tier is not None and expected_tier not in EXPECTED_TIERS:
+            issue(index, "error", "invalid_expected_tier", "expected_tier")
+            expected_tier = None
+        if expected_outcome is not None and expected_outcome not in EXPECTED_OUTCOMES:
+            issue(index, "error", "invalid_expected_outcome", "expected_outcome")
+            expected_outcome = None
+
+        pair = (asin, keyword.casefold())
+        if pair in seen_pairs:
+            issue(index, "error", "duplicate_asin_keyword", "asin,keyword")
+        seen_pairs.add(pair)
+
+        expectations = (
+            expected_discovery,
+            expected_filter,
+            expected_tier,
+            expected_outcome,
+        )
+        has_expected_label = any(value is not None for value in expectations)
+        labeled_records += int(has_expected_label)
+        is_v1_complete = (
+            schema_version == SAMPLE_SCHEMA_VERSION
+            and dataset_split != "unassigned"
+            and label_status != "unlabeled"
+            and has_expected_label
+        )
+        v1_complete_records += int(is_v1_complete)
+
+        if require_v1:
+            if schema_version != SAMPLE_SCHEMA_VERSION:
+                issue(index, "error", "missing_v1_schema_version", "schema_version")
+            if dataset_split == "unassigned":
+                issue(index, "error", "missing_dataset_split", "dataset_split")
+            if label_status == "unlabeled":
+                issue(index, "error", "missing_label_status", "label_status")
+            if not has_expected_label:
+                issue(index, "error", "missing_expected_label", "expected_*")
+
+        split_counts[dataset_split] += 1
+        label_counts[label_status] += 1
+        outcome_counts[expected_outcome or "unlabeled"] += 1
+        for token in _tokens(record.get("product_tags")):
+            if _SAFE_CODE_RE.fullmatch(token):
+                tag_counts[token] += 1
+            else:
+                issue(index, "warning", "invalid_product_tag", "product_tags")
+        for token in _tokens(record.get("reason_codes")):
+            if _SAFE_CODE_RE.fullmatch(token):
+                reason_counts[token] += 1
+            else:
+                issue(index, "warning", "invalid_reason_code", "reason_codes")
+
+    error_counts = Counter(
+        item["code"] for item in issues if item["level"] == "error"
+    )
+    warning_counts = Counter(
+        item["code"] for item in issues if item["level"] == "warning"
+    )
+    total = len(records)
+    profile = {
+        "schema_version_expected": SAMPLE_SCHEMA_VERSION,
+        "total_records": total,
+        "v1_complete_records": v1_complete_records,
+        "v1_completeness_pct": round(v1_complete_records / total * 100, 1) if total else 0.0,
+        "labeled_records": labeled_records,
+        "label_coverage_pct": round(labeled_records / total * 100, 1) if total else 0.0,
+        "dataset_splits": dict(sorted(split_counts.items())),
+        "label_statuses": dict(sorted(label_counts.items())),
+        "expected_outcomes": dict(sorted(outcome_counts.items())),
+        "product_tags": dict(sorted(tag_counts.items())),
+        "reason_codes": dict(sorted(reason_counts.items())),
+        "validation_errors": dict(sorted(error_counts.items())),
+        "validation_warnings": dict(sorted(warning_counts.items())),
+        "strict_ready": not error_counts and v1_complete_records == total,
+    }
+    return {"profile": profile, "issues": issues}
+
+
+def _stage_agreement(
+    cases: list[dict[str, Any]],
+    records: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Compare only explicit stage labels; unknown/unavailable cases are excluded."""
+    definitions = {
+        "discovery": ("expected_discovery", "observed_discovery"),
+        "hard_filter": ("expected_hard_filter", "hard_filter_status"),
+        "tier": ("expected_tier", "tier"),
+    }
+    metrics: dict[str, Any] = {}
+    for name, (expected_key, observed_key) in definitions.items():
+        compared = 0
+        matched = 0
+        unavailable = 0
+        for record, case in zip(records, cases):
+            expected = _optional_label(record, expected_key)
+            if expected is None:
+                continue
+            expected = expected.upper() if expected_key == "expected_tier" and expected.lower() != "unknown" else expected.lower()
+            observed = case.get(observed_key)
+            if observed in (None, "not_run", "unavailable"):
+                unavailable += 1
+                continue
+            compared += 1
+            matched += int(str(observed).lower() == str(expected).lower())
+        metrics[name] = {
+            "labeled_cases": compared + unavailable,
+            "compared_cases": compared,
+            "unavailable_cases": unavailable,
+            "matched_cases": matched,
+            "agreement_pct": round(matched / compared * 100, 1) if compared else None,
+        }
+    return metrics
 
 
 def _list_data(result: dict | None) -> list[dict] | None:
@@ -99,17 +332,20 @@ async def evaluate_records(
     if search_pages < 1 or traffic_pages < 1:
         raise ValueError("search_pages and traffic_pages must be at least 1")
 
+    dataset_validation = validate_sample_records(records)
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 10)))
 
     async def evaluate_one(index: int, record: dict[str, str]) -> dict[str, Any]:
         asin = str(record.get("asin", "")).strip()
         keyword = str(record.get("keyword", "")).strip()
+        marketplace = _label(record, "marketplace", "US").upper()
         case: dict[str, Any] = {
             "case_id": f"case-{index + 1:04d}",
             "discovery_status": "not_run",
             "search_rank": None,
             "detail_status": "not_run",
             "traffic_status": "not_run",
+            "hard_filter_status": "not_run",
             "score_status": "not_run",
         }
         if not asin:
@@ -130,7 +366,7 @@ async def evaluate_records(
                             ratings_count_max=9999999,
                             month_sales_volume_min=0,
                             delivery_type="Both",
-                            amz_site="US",
+                            amz_site=marketplace,
                             page=page,
                         )
                         items = _list_data(search_result)
@@ -157,8 +393,19 @@ async def evaluate_records(
                 if case["discovery_status"] == "not_run":
                     case["discovery_status"] = "not_in_search_results"
 
+            if case["discovery_status"] == "found":
+                case["observed_discovery"] = "found"
+            elif case["discovery_status"] == "not_in_search_results":
+                case["observed_discovery"] = "not_found"
+            else:
+                case["observed_discovery"] = "unavailable"
+
             try:
-                detail_result = await detail_fn(asin)
+                detail_result = (
+                    await detail_fn(asin)
+                    if marketplace == "US"
+                    else await detail_fn(asin, site=marketplace)
+                )
                 detail = detail_result.get("data", {}) if detail_result and not detail_result.get("_error") else None
                 if not isinstance(detail, dict) or not detail:
                     detail = None
@@ -168,9 +415,12 @@ async def evaluate_records(
                 case["detail_status"] = "detail_error"
                 return case
             case["detail_status"] = "available"
+            case["hard_filter_status"] = evaluate_hard_filters(detail)["status"]
 
             try:
-                traffic = await traffic_fn(asin, max_pages=traffic_pages, site="US")
+                traffic = await traffic_fn(
+                    asin, max_pages=traffic_pages, site=marketplace
+                )
             except Exception:
                 traffic = TrafficTermsResult([], 0, 0, [{"page": 0, "error": "exception"}], False, 0)
 
@@ -222,18 +472,27 @@ async def evaluate_records(
         "tier_distribution": dict(sorted(tiers.items())),
         "average_data_completeness": round(mean(case["data_completeness"] for case in scored_cases), 1) if scored_cases else 0.0,
         "average_score_confidence": round(mean(case["score_confidence"] for case in scored_cases), 1) if scored_cases else 0.0,
+        "dataset_profile": dataset_validation["profile"],
+        "stage_agreement": _stage_agreement(cases, records),
         "cache_pool": _cache_snapshot(
             [str(record.get("keyword", "")).strip() for record in records], cache_db
         ),
     }
-    return {"summary": summary, "cases": cases}
+    return {
+        "summary": summary,
+        "cases": cases,
+        "dataset_issues": dataset_validation["issues"],
+    }
 
 
 def _load_records(path: Path, limit: int) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        records = list(csv.DictReader(handle))
-    if not {"asin", "keyword"}.issubset(records[0].keys() if records else set()):
-        raise ValueError("evaluation CSV must contain asin and keyword columns")
+        reader = csv.DictReader(handle)
+        if not {"asin", "keyword"}.issubset(reader.fieldnames or []):
+            raise ValueError("evaluation CSV must contain asin and keyword columns")
+        records = list(reader)
+    if not records:
+        raise ValueError("evaluation CSV contains no sample rows")
     return records[:limit] if limit > 0 else records
 
 
@@ -250,6 +509,16 @@ def main() -> None:
     parser.add_argument("--traffic-pages", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--scoring-version", choices=SUPPORTED_SCORING_VERSIONS, default=DEFAULT_SCORING_VERSION)
+    parser.add_argument(
+        "--require-v1-labels",
+        action="store_true",
+        help="fail before API calls unless every row has complete V1 sample labels",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="validate and profile the private CSV without making API calls",
+    )
     parser.add_argument("--output", type=Path, help="optional private JSON with anonymous per-case diagnostics")
     args = parser.parse_args()
 
@@ -260,6 +529,20 @@ def main() -> None:
         parser.error(f"missing {input_path}")
 
     records = _load_records(input_path, args.limit)
+    validation = validate_sample_records(records, require_v1=args.require_v1_labels)
+    if args.validate_only:
+        output = {"dataset_profile": validation["profile"], "dataset_issues": validation["issues"]}
+        print(json.dumps(output["dataset_profile"], ensure_ascii=False, indent=2))
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+        if validation["profile"]["validation_errors"]:
+            raise SystemExit(2)
+        return
+    if args.require_v1_labels and not validation["profile"]["strict_ready"]:
+        parser.error(
+            "sample set is not V1-ready; run --validate-only --output in the private data directory"
+        )
     result = asyncio.run(
         evaluate_records(
             records,

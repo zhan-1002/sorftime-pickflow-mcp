@@ -2,7 +2,7 @@
 
 ## Now
 
-- [x] 16-tool MCP server (cache + pipeline + analysis + session)
+- [x] 19-tool MCP server (cache + pipeline + analysis + session + 1688 sourcing)
 - [x] Versioned nine-dimension scoring (`v1_legacy` reproduces 97-ASIN S+A=79.4%; `v2_semantic` is the corrected default)
 - [x] Three-state hard filters (pass/fail/unknown) without treating missing fields as zero
 - [x] SQLite ABA cache + keyword_detail result cache (7d TTL)
@@ -10,9 +10,23 @@
 - [x] Smart skip low-volume keywords
 - [x] Unified traffic pagination, de-duplication, retries, and partial-failure metadata
 - [x] Private local evaluation CLI with anonymous failure-stage diagnostics
-- [x] 21 unit/regression tests across 4 test files
+- [x] Private sample-set V1 contract: split/status/stage labels, aggregate profile, zero-call validation
+- [x] 132 unit/regression tests across 7 test files
 
 ## Next
+
+- [ ] **Complete private 97-ASIN sample-set V1 annotation and held-out validation**
+
+  The code-side V1 contract and `--validate-only` profile are complete. The
+  private CSV still needs calibration/validation/disputed splits, explicit
+  expected stage labels, product tags and reason codes. Keep identifiers and
+  notes outside Git; publish aggregate agreement and failure-stage counts only.
+
+- [ ] **Archive the current supplier system and build a Feishu demo**
+
+  Manually normalize component material, item/package dimensions and weight,
+  MOQ, supplier capability and BOM versions. The manual 1688 step must emit the
+  same stable records a future automated adapter would produce.
 
 - [ ] **ABA segmented cache pull + recall-depth evaluation**
 
@@ -70,11 +84,27 @@
   
   Works for discovery (img search 100 + kw search 100 → 198 unique). Image search → MUST_MATCH filter
   narrows to ~30 candidates. But sorftime 1688 API only returns 16 fields (title, price, sales, store…)
-  — no product description or material/attribute fields. Cannot distinguish product form factor
-  (ball vs cross vs sign) from title alone. On hold until API adds description field.
+  — no supplier-side product description or material/attribute fields. Cannot distinguish product
+  form factor (ball vs cross vs sign) from title alone without visual/browser evidence.
   
   Strategy confirmed: img search 5p + kw search 1p → merge → MUST_MATCH core attrs → EXCLUDE noise.
-  Pending: `supplier_lookup` MCP tool. Blocked by API field limitation.
+  The first backend slice is now implemented; exact identity still requires Codex visual review
+  and browser verification.
+
+- [x] **1688 backend vertical slice** — deterministic fingerprint extractor, 1688 API adapters,
+  candidate deduplication, hard mismatch gates, VisualReviewBundle for Codex vision. 3 MCP tools
+  (`asin_fingerprint`, `supplier_search`, `supplier_compare_prepare`). 95 synthetic tests; full
+  suite 120/120. Live smoke verified product detail, image search, keyword search, and all 3 tools
+  without committing private identifiers or raw responses.
+
+- [x] **Codex 1688 plugin/skill integration** — versioned under `codex-plugin/pickflow-1688/`
+
+  Official plugin and skill validators pass. The repository-relative MCP configuration performs a
+  real stdio handshake and exposes all 19 tools. One private live smoke used 3 upstream calls to
+  normalize 120 candidates and cap the visual queue at 5; sidebar-browser review verified visible
+  SKU, pack, MOQ, tier-price, and per-SKU package measurement fields without committing identifiers.
+  Security sliders are a recoverable `verification_required` handoff, not a data error. Amazon image
+  render failure remains unknown rather than becoming false positive evidence. Full suite 124/124.
 
 - [ ] **1688 Official API integration** — supplier cost lookup and fba_profit automation
 
